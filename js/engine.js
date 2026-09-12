@@ -5,14 +5,7 @@ import {
   CELL, ENTITY_TYPES, HAZARD_TYPES, SOLID_TYPES,
   GRAVITY_VECTORS, ACTION_TYPES, TRIGGER_MODES, PHYSICS,
 } from './constants.js';
-
-const KEY_MAP = {
-  ArrowLeft: 'left', KeyA: 'left',
-  ArrowRight: 'right', KeyD: 'right',
-  ArrowUp: 'up', KeyW: 'up',
-  ArrowDown: 'down', KeyS: 'down',
-  Space: 'jump',
-};
+import { loadKeybinds, buildKeyMap } from './keybindings.js';
 
 export class Engine {
   constructor(canvas, level, { onDeath, onWin, onStateChange } = {}) {
@@ -24,21 +17,25 @@ export class Engine {
     this.onStateChange = onStateChange || (() => {});
     this.raw = { left: false, right: false, up: false, down: false, jump: false };
     this.debugTriggers = false;
+    this.keymap = buildKeyMap(loadKeybinds());
     this._keydown = (e) => this._setKey(e.code, true);
     this._keyup = (e) => this._setKey(e.code, false);
+    this._onKeybindsChanged = () => { this.keymap = buildKeyMap(loadKeybinds()); };
     window.addEventListener('keydown', this._keydown);
     window.addEventListener('keyup', this._keyup);
+    window.addEventListener('leveldevil:keybinds-changed', this._onKeybindsChanged);
     this.reset();
   }
 
   destroy() {
     window.removeEventListener('keydown', this._keydown);
     window.removeEventListener('keyup', this._keyup);
+    window.removeEventListener('leveldevil:keybinds-changed', this._onKeybindsChanged);
     cancelAnimationFrame(this._raf);
   }
 
   _setKey(code, val) {
-    const k = KEY_MAP[code];
+    const k = this.keymap[code];
     if (!k) return;
     this.raw[k] = val;
     if (val) this._lastJumpPress = k === 'jump' ? performance.now() : this._lastJumpPress;
@@ -543,15 +540,18 @@ export class Engine {
     ctx.save();
     ctx.translate(-this.camera.x, -this.camera.y);
 
-    // grid backdrop
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    const startCol = Math.floor(this.camera.x / CELL), endCol = startCol + Math.ceil(cv.width / CELL) + 1;
-    const startRow = Math.floor(this.camera.y / CELL), endRow = startRow + Math.ceil(cv.height / CELL) + 1;
-    for (let c = startCol; c <= endCol; c++) {
-      ctx.beginPath(); ctx.moveTo(c * CELL, startRow * CELL); ctx.lineTo(c * CELL, endRow * CELL); ctx.stroke();
-    }
-    for (let r = startRow; r <= endRow; r++) {
-      ctx.beginPath(); ctx.moveTo(startCol * CELL, r * CELL); ctx.lineTo(endCol * CELL, r * CELL); ctx.stroke();
+    // grid backdrop — a build aid only: never shown in real gameplay, only in
+    // the editor's debug/playtest view (same flag that reveals triggers).
+    if (this.debugTriggers) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+      const startCol = Math.floor(this.camera.x / CELL), endCol = startCol + Math.ceil(cv.width / CELL) + 1;
+      const startRow = Math.floor(this.camera.y / CELL), endRow = startRow + Math.ceil(cv.height / CELL) + 1;
+      for (let c = startCol; c <= endCol; c++) {
+        ctx.beginPath(); ctx.moveTo(c * CELL, startRow * CELL); ctx.lineTo(c * CELL, endRow * CELL); ctx.stroke();
+      }
+      for (let r = startRow; r <= endRow; r++) {
+        ctx.beginPath(); ctx.moveTo(startCol * CELL, r * CELL); ctx.lineTo(endCol * CELL, r * CELL); ctx.stroke();
+      }
     }
 
     for (const rt of this.runtime.values()) this._renderEntity(rt);
@@ -570,44 +570,72 @@ export class Engine {
     // toggle, not a stylistic effect. This keeps traps from being telegraphed.
     ctx.save();
     switch (rt.def.type) {
-      case ENTITY_TYPES.BLOCK:
-        ctx.fillStyle = '#111319';
-        ctx.strokeStyle = '#3a3f52';
-        ctx.lineWidth = 2;
-        ctx.fillRect(rt.x, rt.y, w, h);
-        ctx.strokeRect(rt.x + 1, rt.y + 1, w - 2, h - 2);
+      case ENTITY_TYPES.BLOCK: {
+        const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
+        grad.addColorStop(0, '#2c2f42'); grad.addColorStop(0.5, '#181a26'); grad.addColorStop(1, '#0e0f16');
+        ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
+        ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(rt.x, rt.y, w, 3);
+        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(rt.x, rt.y + h - 3, w, 3);
+        ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+        ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
+        // mortar seams between authored cells, for a brick/block feel on wide runs
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+        for (let i = 1; i < rt.def.w; i++) { ctx.beginPath(); ctx.moveTo(rt.x + i * CELL, rt.y + 3); ctx.lineTo(rt.x + i * CELL, rt.y + h - 3); ctx.stroke(); }
+        for (let j = 1; j < rt.def.h; j++) { ctx.beginPath(); ctx.moveTo(rt.x + 3, rt.y + j * CELL); ctx.lineTo(rt.x + w - 3, rt.y + j * CELL); ctx.stroke(); }
         break;
-      case ENTITY_TYPES.PLATFORM:
-        ctx.fillStyle = '#2d6cdf';
-        ctx.fillRect(rt.x, rt.y, w, h);
-        ctx.fillStyle = 'rgba(255,255,255,0.15)';
-        ctx.fillRect(rt.x, rt.y, w, 4);
+      }
+      case ENTITY_TYPES.PLATFORM: {
+        const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
+        grad.addColorStop(0, '#5b93ee'); grad.addColorStop(0.5, '#2d6cdf'); grad.addColorStop(1, '#1a4bb0');
+        ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(rt.x, rt.y, w, 3);
+        ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
+        // plank seams
+        ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+        for (let i = 1; i < rt.def.w; i++) { ctx.beginPath(); ctx.moveTo(rt.x + i * CELL, rt.y + 2); ctx.lineTo(rt.x + i * CELL, rt.y + h - 2); ctx.stroke(); }
         break;
+      }
       case ENTITY_TYPES.SPIKE: {
-        ctx.fillStyle = '#e63946';
-        drawSpikeRow(ctx, rt.x, rt.y, w, h, rt.def.w, (rt.def.props && rt.def.props.facing) || 'up');
+        const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
+        grad.addColorStop(0, '#ff6b73'); grad.addColorStop(1, '#c1121f');
+        ctx.fillStyle = grad;
+        ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1.5;
+        drawSpikeRow(ctx, rt.x, rt.y, w, h, rt.def.w, (rt.def.props && rt.def.props.facing) || 'up', true);
         break;
       }
       case ENTITY_TYPES.SPRING: {
-        ctx.fillStyle = '#ffd166';
-        ctx.fillRect(rt.x + 4, rt.y + h * 0.4, w - 8, h * 0.6);
-        ctx.strokeStyle = '#8a6d1a'; ctx.lineWidth = 2;
-        ctx.strokeRect(rt.x + 4, rt.y + h * 0.4, w - 8, h * 0.6);
         const dir = (rt.def.props && rt.def.props.direction) || 'up';
-        ctx.fillStyle = '#8a6d1a';
-        ctx.font = '16px sans-serif'; ctx.textAlign = 'center';
+        const baseColor = '#8a6d1a';
+        const padY = rt.y + h * 0.42, padH = h * 0.58;
+        // coils: a few stacked ellipse arcs suggesting a compressed spring
+        ctx.strokeStyle = '#d9a52e'; ctx.lineWidth = 3;
+        const coils = 3;
+        for (let i = 0; i < coils; i++) {
+          const cy = rt.y + h * 0.42 + (i + 0.5) * (h * 0.5 / coils);
+          ctx.beginPath();
+          ctx.ellipse(rt.x + w / 2, cy, w * 0.32, h * 0.09, 0, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        const padGrad = ctx.createLinearGradient(rt.x, padY, rt.x, padY + padH);
+        padGrad.addColorStop(0, '#ffe08a'); padGrad.addColorStop(1, '#ffb703');
+        ctx.fillStyle = padGrad;
+        ctx.fillRect(rt.x + 4, rt.y + h * 0.82, w - 8, h * 0.18);
+        ctx.strokeStyle = baseColor; ctx.lineWidth = 2;
+        ctx.strokeRect(rt.x + 4, rt.y + h * 0.82, w - 8, h * 0.18);
+        ctx.fillStyle = baseColor;
+        ctx.font = 'bold 16px sans-serif'; ctx.textAlign = 'center';
         const arrow = { up: '↑', down: '↓', left: '←', right: '→' }[dir];
         ctx.fillText(arrow, rt.x + w / 2, rt.y + h * 0.35);
         break;
       }
       case ENTITY_TYPES.FAN: {
         const dir = (rt.def.props && rt.def.props.direction) || 'right';
-        ctx.fillStyle = '#0d3b4a';
-        ctx.fillRect(rt.x, rt.y, w, h);
+        const cx = rt.x + w / 2, cy = rt.y + h / 2;
+        const grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, Math.max(w, h) * 0.6);
+        grad.addColorStop(0, '#123f4d'); grad.addColorStop(1, '#08222b');
+        ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
         ctx.strokeStyle = '#48cae4'; ctx.lineWidth = 2;
         ctx.strokeRect(rt.x + 2, rt.y + 2, w - 4, h - 4);
-        // little swirl blades
-        const cx = rt.x + w / 2, cy = rt.y + h / 2;
         const spin = (this.simTime || 0) * 8;
         ctx.strokeStyle = '#90e0ef';
         for (let i = 0; i < 3; i++) {
@@ -618,6 +646,8 @@ export class Engine {
           ctx.lineWidth = 4;
           ctx.stroke();
         }
+        ctx.fillStyle = '#e0fbff';
+        ctx.beginPath(); ctx.arc(cx, cy, 3.5, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#90e0ef';
         ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
         const arrow = { up: '↑', down: '↓', left: '←', right: '→' }[dir];
@@ -627,8 +657,11 @@ export class Engine {
       case ENTITY_TYPES.SPINNER: {
         const cx = rt.x + w / 2, cy = rt.y + h / 2;
         const r = CELL * ((rt.def.props && rt.def.props.radius) || 0.9) * (rt.def.w);
-        ctx.fillStyle = '#c9184a';
-        ctx.strokeStyle = '#c9184a';
+        ctx.fillStyle = 'rgba(0,0,0,0.25)';
+        ctx.beginPath(); ctx.ellipse(cx, cy + 3, r * 0.4, r * 0.15, 0, 0, Math.PI * 2); ctx.fill();
+        const bladeGrad = ctx.createLinearGradient(cx - r, cy - r, cx + r, cy + r);
+        bladeGrad.addColorStop(0, '#ff5c8a'); bladeGrad.addColorStop(1, '#8f0d34');
+        ctx.strokeStyle = bladeGrad;
         const spikes = 8;
         for (let i = 0; i < spikes; i++) {
           const a = rt.angle + (i / spikes) * Math.PI * 2;
@@ -638,8 +671,11 @@ export class Engine {
           ctx.lineWidth = 5;
           ctx.stroke();
         }
+        const hubGrad = ctx.createRadialGradient(cx - r * 0.1, cy - r * 0.1, 1, cx, cy, r * 0.35);
+        hubGrad.addColorStop(0, '#4a4d6b'); hubGrad.addColorStop(1, '#1e2030');
         ctx.beginPath(); ctx.arc(cx, cy, r * 0.35, 0, Math.PI * 2);
-        ctx.fillStyle = '#2b2d42'; ctx.fill();
+        ctx.fillStyle = hubGrad; ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1; ctx.stroke();
         break;
       }
       case ENTITY_TYPES.TELEPORTER: {
@@ -648,8 +684,9 @@ export class Engine {
         const spin = (this.simTime || 0) * 3;
         const colors = ['#9d4edd', '#f72585', '#4cc9f0', '#f9c74f', '#43aa8b', '#f3722c', '#577590', '#90be6d'];
         const color = colors[(freq - 1) % colors.length];
-        ctx.fillStyle = 'rgba(0,0,0,0.3)';
-        ctx.fillRect(rt.x, rt.y, w, h);
+        const glow = ctx.createRadialGradient(cx, cy, 1, cx, cy, Math.max(w, h) * 0.6);
+        glow.addColorStop(0, color + 'aa'); glow.addColorStop(0.6, color + '33'); glow.addColorStop(1, 'rgba(0,0,0,0.4)');
+        ctx.fillStyle = glow; ctx.fillRect(rt.x, rt.y, w, h);
         ctx.strokeStyle = color; ctx.lineWidth = 3;
         for (let ring = 0; ring < 2; ring++) {
           ctx.beginPath();
@@ -664,21 +701,38 @@ export class Engine {
         }
         break;
       }
-      case ENTITY_TYPES.GOAL:
+      case ENTITY_TYPES.GOAL: {
+        const poleX = rt.x + w * 0.2;
+        const poleGrad = ctx.createLinearGradient(poleX, rt.y, poleX + 4, rt.y);
+        poleGrad.addColorStop(0, '#8a8f9e'); poleGrad.addColorStop(1, '#4a4e5c');
+        ctx.fillStyle = poleGrad; ctx.fillRect(poleX, rt.y, w * 0.08, h);
+        const wave = Math.sin((this.simTime || 0) * 4) * 3;
         ctx.fillStyle = '#2ec4b6';
-        ctx.fillRect(rt.x, rt.y, w, h);
-        ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center';
-        ctx.fillText('⚑', rt.x + w / 2, rt.y + h / 2 + 5);
-        break;
-      case ENTITY_TYPES.CHECKPOINT:
-        ctx.fillStyle = rt.activated ? '#118ab2' : '#3a6b7a';
-        ctx.fillRect(rt.x + w * 0.35, rt.y, w * 0.1, h);
         ctx.beginPath();
-        ctx.moveTo(rt.x + w * 0.45, rt.y + h * 0.15);
-        ctx.lineTo(rt.x + w * 0.9, rt.y + h * 0.3);
-        ctx.lineTo(rt.x + w * 0.45, rt.y + h * 0.45);
+        ctx.moveTo(poleX + w * 0.08, rt.y + h * 0.08);
+        ctx.quadraticCurveTo(rt.x + w * 0.75 + wave, rt.y + h * 0.16, rt.x + w * 0.85, rt.y + h * 0.28);
+        ctx.quadraticCurveTo(rt.x + w * 0.75 + wave, rt.y + h * 0.4, poleX + w * 0.08, rt.y + h * 0.48);
         ctx.closePath(); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1; ctx.stroke();
+        ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(rt.x + w / 2, rt.y + h - 2, w * 0.35, 4, 0, 0, Math.PI * 2); ctx.fill();
         break;
+      }
+      case ENTITY_TYPES.CHECKPOINT: {
+        const active = rt.activated;
+        const poleX = rt.x + w * 0.35;
+        ctx.fillStyle = active ? '#7cd9ec' : '#4a5a63';
+        ctx.fillRect(poleX, rt.y, w * 0.08, h);
+        const flagColor = active ? '#118ab2' : '#3a6b7a';
+        const wave = active ? Math.sin((this.simTime || 0) * 5) * 2 : 0;
+        ctx.fillStyle = flagColor;
+        ctx.beginPath();
+        ctx.moveTo(poleX + w * 0.08, rt.y + h * 0.12);
+        ctx.quadraticCurveTo(rt.x + w * 0.8 + wave, rt.y + h * 0.22, rt.x + w * 0.85, rt.y + h * 0.32);
+        ctx.quadraticCurveTo(rt.x + w * 0.8 + wave, rt.y + h * 0.42, poleX + w * 0.08, rt.y + h * 0.5);
+        ctx.closePath(); ctx.fill();
+        if (active) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1; ctx.stroke(); }
+        break;
+      }
       case ENTITY_TYPES.TRIGGER:
         // Triggers are always invisible in real play — only the editor's
         // debug/playtest view reveals their zone, never actual gameplay.
@@ -694,19 +748,26 @@ export class Engine {
         // can tell it's there and understand it can be pressed again once
         // its cooldown has elapsed.
         const cooling = this.simTime < rt.buttonReadyAt;
-        ctx.fillStyle = '#2b2d3d';
-        ctx.fillRect(rt.x, rt.y, w, h);
+        const housingGrad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
+        housingGrad.addColorStop(0, '#383c52'); housingGrad.addColorStop(1, '#22242f');
+        ctx.fillStyle = housingGrad; ctx.fillRect(rt.x, rt.y, w, h);
         ctx.strokeStyle = '#5b5f7a'; ctx.lineWidth = 2;
         ctx.strokeRect(rt.x + 2, rt.y + 2, w - 4, h - 4);
         const padH = cooling ? h * 0.22 : h * 0.32;
-        ctx.fillStyle = cooling ? '#e07a2c' : '#06d6a0';
+        const padColor = cooling ? ['#f6a35c', '#c9660f'] : ['#3ee9b8', '#06a879'];
+        const padGrad = ctx.createLinearGradient(rt.x, rt.y + h - padH - h * 0.12, rt.x, rt.y + h - h * 0.12);
+        padGrad.addColorStop(0, padColor[0]); padGrad.addColorStop(1, padColor[1]);
+        ctx.fillStyle = padGrad;
         ctx.fillRect(rt.x + w * 0.18, rt.y + h - padH - h * 0.12, w * 0.64, padH);
+        ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(rt.x + w * 0.18, rt.y + h - padH - h * 0.12, w * 0.64, padH);
         break;
       }
-      case ENTITY_TYPES.DECOR:
-        ctx.fillStyle = '#4a4e69';
-        ctx.fillRect(rt.x, rt.y, w, h);
+      case ENTITY_TYPES.DECOR: {
+        const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
+        grad.addColorStop(0, '#5c6088'); grad.addColorStop(1, '#3a3d57');
+        ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
         break;
+      }
     }
     ctx.restore();
   }
@@ -777,7 +838,7 @@ function roundRect(ctx, x, y, w, h, r) {
 // Draws a row (or column, for left/right-facing) of triangular spikes so the
 // hazard visually points the way its `facing` prop says, even though the
 // hitbox stays a simple axis-aligned box.
-function drawSpikeRow(ctx, x, y, w, h, cellsWide, facing) {
+function drawSpikeRow(ctx, x, y, w, h, cellsWide, facing, stroke = false) {
   if (facing === 'up' || facing === 'down') {
     for (let i = 0; i < cellsWide; i++) {
       const bx = x + i * CELL;
@@ -789,6 +850,7 @@ function drawSpikeRow(ctx, x, y, w, h, cellsWide, facing) {
       }
       ctx.closePath();
       ctx.fill();
+      if (stroke) ctx.stroke();
     }
   } else {
     const rowsTall = Math.max(1, Math.round(h / CELL));
@@ -802,6 +864,7 @@ function drawSpikeRow(ctx, x, y, w, h, cellsWide, facing) {
       }
       ctx.closePath();
       ctx.fill();
+      if (stroke) ctx.stroke();
     }
   }
 }

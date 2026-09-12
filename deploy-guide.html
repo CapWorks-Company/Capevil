@@ -291,12 +291,17 @@
       </div>
     </div>
     <div class="station-body">
-      <p><code>js/config.js</code> contient déjà l'URL et la clé de ton projet Supabase. Il ne reste qu'à créer la table. Sur <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">ton tableau de bord Supabase</a> → ouvre ton projet → <b>SQL Editor → New query</b> → colle le contenu de <code>sql/schema.sql</code> → <b>Run</b>.</p>
-      <div class="field"><span class="k">Ça crée :</span><br><span class="v">table <b>levels</b> · règles de sécurité (RLS) · fonction de comptage des parties</span></div>
-      <p class="muted">Vérifie ensuite dans <b>Table Editor</b> : une table <code>levels</code> vide doit apparaître (0 lignes, c'est normal — personne n'a encore publié de niveau).</p>
+      <p><code>js/config.js</code> contient déjà l'URL et la clé de ton projet Supabase. Il ne reste qu'à créer les tables. Sur <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">ton tableau de bord Supabase</a> → ouvre ton projet → <b>SQL Editor → New query</b> → colle le contenu de <code>sql/schema.sql</code> → <b>Run</b>. Ce fichier est idempotent : si tu avais déjà une base d'une version précédente, le ré-exécuter ajoute juste ce qui manque, sans rien casser.</p>
+      <div class="field"><span class="k">Ça crée :</span><br><span class="v">tables <b>levels</b>, <b>profiles</b> (comptes) et <b>reports</b> (signalements) · règles de sécurité (RLS) · authentification par compte · fonctions de comptage, likes, approbation et signalement</span></div>
+      <p class="muted">Vérifie ensuite dans <b>Table Editor</b> : les tables <code>levels</code>, <code>profiles</code> et <code>reports</code> vides doivent apparaître (0 lignes, c'est normal — personne n'a encore de compte ni de niveau publié).</p>
 
       <div class="step"><input type="checkbox" id="s10"><label for="s10">Le script SQL s'est exécuté sans erreur ("Success. No rows returned")</label></div>
-      <div class="step"><input type="checkbox" id="s11"><label for="s11">La table <b>levels</b> est visible dans Table Editor</label></div>
+      <div class="step"><input type="checkbox" id="s11"><label for="s11">Les tables <b>levels</b>, <b>profiles</b> et <b>reports</b> sont visibles dans Table Editor</label></div>
+
+      <p style="margin-top:16px;"><b>Devenir admin</b> (pour approuver des niveaux en "Parties officielles") : crée d'abord un compte joueur normal depuis le site (page d'accueil → "Créer un compte"), puis, une seule fois, dans <b>SQL Editor</b> :</p>
+      <pre style="background:#10111a;border-radius:8px;padding:10px;font-size:12px;overflow-x:auto;">update public.profiles set is_admin = true
+where id = (select id from auth.users where email = 'ton-email@exemple.com');</pre>
+      <p class="muted">Connecte-toi ensuite avec ce compte sur <code>admin.html</code>.</p>
     </div>
   </section>
 

@@ -1,32 +1,34 @@
 import {
   CELL, ENTITY_TYPES, ACTION_TYPES, TRIGGER_MODES, GRAVITY_DIRS,
   ENTITY_TOGGLES, TOGGLE_LABELS, togglesForType, SPIKE_FACINGS, FACING_LABELS,
-  TELEPORTER_MAX_PER_FREQUENCY, TELEPORTER_FREQUENCIES,
+  TELEPORTER_MAX_PER_FREQUENCY, TELEPORTER_FREQUENCIES, DEFAULT_EDIT_BOUNDS,
 } from './constants.js';
 import {
   createEmptyLevel, createEntity, createAction, cloneLevel, findEntity,
   removeEntity, validateLevel, uid, normalizeLevel, nextTeleporterFrequency,
+  normalizeEditBounds,
 } from './level-model.js';
 import { buildSampleLevel } from './sample-level.js';
 import { Engine } from './engine.js';
 import { saveLocalDraft, loadLocalDraft } from './local-storage.js';
 import { publishLevel, updateOwnLevel, getLevel, isBackendReady, getSession, getMyProfile } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
+import { mountKeybindButton } from './keybind-ui.js';
 
 // ---------------------------------------------------------------- palette
 const PALETTE = [
-  { type: ENTITY_TYPES.BLOCK, label: 'Bloc solide', color: '#111319' },
-  { type: ENTITY_TYPES.SPIKE, label: 'Pointes', color: '#e63946' },
-  { type: ENTITY_TYPES.SPRING, label: 'Ressort (haut/bas)', color: '#ffd166' },
-  { type: ENTITY_TYPES.FAN, label: 'Ventilateur (vent)', color: '#48cae4' },
-  { type: ENTITY_TYPES.SPINNER, label: 'Roue tournante', color: '#c9184a' },
-  { type: ENTITY_TYPES.PLATFORM, label: 'Plateforme mobile', color: '#2d6cdf' },
-  { type: ENTITY_TYPES.TELEPORTER, label: 'Téléporteur', color: '#9d4edd' },
-  { type: ENTITY_TYPES.CHECKPOINT, label: 'Checkpoint', color: '#118ab2' },
-  { type: ENTITY_TYPES.GOAL, label: 'Arrivée (but)', color: '#2ec4b6' },
-  { type: ENTITY_TYPES.TRIGGER, label: 'Zone de trigger (invisible)', color: '#f4d35e' },
-  { type: ENTITY_TYPES.BUTTON, label: 'Bouton (visible, répétable)', color: '#06d6a0' },
-  { type: ENTITY_TYPES.DECOR, label: 'Décor', color: '#4a4e69' },
+  { type: ENTITY_TYPES.BLOCK, label: 'Bloc solide', color: '#111319', icon: '🧱' },
+  { type: ENTITY_TYPES.SPIKE, label: 'Pointes', color: '#e63946', icon: '🔺' },
+  { type: ENTITY_TYPES.SPRING, label: 'Ressort (haut/bas)', color: '#ffd166', icon: '🌀' },
+  { type: ENTITY_TYPES.FAN, label: 'Ventilateur (vent)', color: '#48cae4', icon: '🌬️' },
+  { type: ENTITY_TYPES.SPINNER, label: 'Roue tournante', color: '#c9184a', icon: '⚙️' },
+  { type: ENTITY_TYPES.PLATFORM, label: 'Plateforme mobile', color: '#2d6cdf', icon: '▬' },
+  { type: ENTITY_TYPES.TELEPORTER, label: 'Téléporteur', color: '#9d4edd', icon: '🌀' },
+  { type: ENTITY_TYPES.CHECKPOINT, label: 'Checkpoint', color: '#118ab2', icon: '🚩' },
+  { type: ENTITY_TYPES.GOAL, label: 'Arrivée (but)', color: '#2ec4b6', icon: '🏁' },
+  { type: ENTITY_TYPES.TRIGGER, label: 'Zone de trigger (invisible)', color: '#f4d35e', icon: '👁️' },
+  { type: ENTITY_TYPES.BUTTON, label: 'Bouton (visible, répétable)', color: '#06d6a0', icon: '🔘' },
+  { type: ENTITY_TYPES.DECOR, label: 'Décor', color: '#4a4e69', icon: '🌿' },
 ];
 
 const ACTION_LABELS = {
@@ -58,6 +60,11 @@ const titleInput = document.getElementById('level-title-input');
 const authorInput = document.getElementById('level-author-input');
 const colsInput = document.getElementById('cols-input');
 const rowsInput = document.getElementById('rows-input');
+const ebToggle = document.getElementById('editbounds-toggle');
+const ebColMin = document.getElementById('eb-colmin');
+const ebColMax = document.getElementById('eb-colmax');
+const ebRowMin = document.getElementById('eb-rowmin');
+const ebRowMax = document.getElementById('eb-rowmax');
 const statusEl = document.getElementById('status-msg');
 const pickBanner = document.getElementById('pick-banner');
 
@@ -102,6 +109,7 @@ async function init() {
   renderProps();
   bindToolbar();
   bindCanvas();
+  mountKeybindButton(document.getElementById('keybind-bar'));
 
   const accountBar = document.getElementById('account-bar');
   if (accountBar) {
@@ -145,6 +153,7 @@ function syncHeaderInputs() {
   titleInput.value = level.title || '';
   colsInput.value = level.cols;
   rowsInput.value = level.rows;
+  syncEditBoundsInputs();
   updatePublishButtonState();
 }
 
@@ -153,24 +162,79 @@ function resizeCanvas() {
   canvas.height = level.rows * CELL;
 }
 
+// ---------------------------------------------------------- editable zone
+// Optionally locks editing (placing/moving/erasing/player-start) to a
+// rectangular sub-area of the grid, so a level with a fixed decorative
+// border can't be accidentally edited outside its playable core. Purely an
+// editor-time convenience — never saved into anything the engine reads.
+function syncEditBoundsInputs() {
+  const eb = level.editBounds;
+  const enabled = !!(eb && eb.enabled);
+  ebToggle.checked = enabled;
+  ebColMin.value = eb ? eb.colMin : DEFAULT_EDIT_BOUNDS.colMin;
+  ebColMax.value = eb ? eb.colMax : DEFAULT_EDIT_BOUNDS.colMax;
+  ebRowMin.value = eb ? eb.rowMin : DEFAULT_EDIT_BOUNDS.rowMin;
+  ebRowMax.value = eb ? eb.rowMax : DEFAULT_EDIT_BOUNDS.rowMax;
+  for (const el of [ebColMin, ebColMax, ebRowMin, ebRowMax]) el.disabled = !enabled;
+}
+
+function applyEditBoundsFromInputs() {
+  const wantColMax = parseInt(ebColMax.value, 10);
+  const wantRowMax = parseInt(ebRowMax.value, 10);
+  // The zone can only ever be as big as the grid — rather than silently
+  // cutting the requested max down to fit (confusing: "why won't it take
+  // 30?"), grow the grid itself so the requested zone always fits.
+  if (ebToggle.checked) {
+    if (Number.isFinite(wantColMax) && wantColMax >= level.cols) {
+      level.cols = wantColMax + 1;
+      colsInput.value = level.cols;
+    }
+    if (Number.isFinite(wantRowMax) && wantRowMax >= level.rows) {
+      level.rows = wantRowMax + 1;
+      rowsInput.value = level.rows;
+    }
+    resizeCanvas();
+  }
+  level.editBounds = normalizeEditBounds({
+    enabled: ebToggle.checked,
+    colMin: parseInt(ebColMin.value, 10),
+    colMax: wantColMax,
+    rowMin: parseInt(ebRowMin.value, 10),
+    rowMax: wantRowMax,
+  }, level.cols, level.rows);
+  syncEditBoundsInputs();
+  render();
+}
+
+function inEditBounds(cx, cy) {
+  const eb = level.editBounds;
+  if (!eb || !eb.enabled) return true;
+  return cx >= eb.colMin && cx <= eb.colMax && cy >= eb.rowMin && cy <= eb.rowMax;
+}
+
+function editBoundsMsg() {
+  const eb = level.editBounds;
+  return `Zone verrouillée : tu ne peux modifier que les colonnes ${eb.colMin}-${eb.colMax}, lignes ${eb.rowMin}-${eb.rowMax}.`;
+}
+
 // ---------------------------------------------------------------- palette UI
 function buildPalette() {
   toolboxEl.innerHTML = '<h3 style="margin-top:0;">Outils</h3>';
-  const selectBtn = paletteButton('select', 'Sélection / déplacer', '#888');
-  const eraseBtn = paletteButton('erase', 'Gomme', '#555');
-  const startBtn = paletteButton('playerstart', 'Départ joueur', '#f77f00');
+  const selectBtn = paletteButton('select', 'Sélection / déplacer', '#888', '↖️');
+  const eraseBtn = paletteButton('erase', 'Gomme', '#555', '🧽');
+  const startBtn = paletteButton('playerstart', 'Départ joueur', '#f77f00', '🧍');
   toolboxEl.append(selectBtn, startBtn, eraseBtn);
   const hr = document.createElement('hr');
   hr.className = 'toolbox-sep';
   toolboxEl.appendChild(hr);
-  for (const p of PALETTE) toolboxEl.appendChild(paletteButton(p.type, p.label, p.color));
+  for (const p of PALETTE) toolboxEl.appendChild(paletteButton(p.type, p.label, p.color, p.icon));
 }
 
-function paletteButton(toolId, label, color) {
+function paletteButton(toolId, label, color, icon = '') {
   const btn = document.createElement('button');
   btn.className = 'palette-btn' + (tool === toolId ? ' active' : '');
   btn.dataset.tool = toolId;
-  btn.innerHTML = `<span class="palette-swatch" style="background:${color}"></span>${label}`;
+  btn.innerHTML = `<span class="palette-swatch" style="background:${color}">${icon}</span>${label}`;
   btn.addEventListener('click', () => { tool = toolId; selectedId = null; buildPalette(); render(); renderProps(); });
   return btn;
 }
@@ -186,6 +250,7 @@ function render() {
 
   for (const ent of level.entities) drawEntity(ent);
   drawTriggerLinks();
+  drawEditBoundsOverlay();
 
   // player start marker
   const ps = level.playerStart;
@@ -237,6 +302,26 @@ function drawTriggerLinks() {
       drawLink(fromX, fromY, tx, ty);
     }
   }
+  ctx.restore();
+}
+
+// Dims everything outside the locked editable zone (if one is set) and draws
+// a border around it, so it's obvious at a glance what can and can't be
+// touched right now.
+function drawEditBoundsOverlay() {
+  const eb = level.editBounds;
+  if (!eb || !eb.enabled) return;
+  const left = eb.colMin * CELL, top = eb.rowMin * CELL;
+  const right = (eb.colMax + 1) * CELL, bottom = (eb.rowMax + 1) * CELL;
+  ctx.save();
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  if (left > 0) ctx.fillRect(0, 0, left, canvas.height);
+  if (right < canvas.width) ctx.fillRect(right, 0, canvas.width - right, canvas.height);
+  if (top > 0) ctx.fillRect(left, 0, right - left, top);
+  if (bottom < canvas.height) ctx.fillRect(left, bottom, right - left, canvas.height - bottom);
+  ctx.strokeStyle = '#f4d35e';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(left, top, right - left, bottom - top);
   ctx.restore();
 }
 
@@ -358,13 +443,17 @@ function handleCellClick(cx, cy) {
     return;
   }
   if (tool === 'playerstart') {
+    if (!inEditBounds(cx, cy)) { setStatus(editBoundsMsg(), true); return; }
     level.playerStart = { x: cx, y: cy };
     render();
     return;
   }
   if (tool === 'erase') {
     const ent = entityAt(cx, cy);
-    if (ent) { removeEntity(level, ent.id); if (selectedId === ent.id) selectedId = null; }
+    if (ent) {
+      if (!inEditBounds(ent.x, ent.y)) { setStatus(editBoundsMsg(), true); return; }
+      removeEntity(level, ent.id); if (selectedId === ent.id) selectedId = null;
+    }
     render(); renderProps();
     return;
   }
@@ -376,6 +465,7 @@ function handleCellClick(cx, cy) {
       if (clicked && clicked.id !== selectedId) {
         selectedId = clicked.id; // switch selection instead
       } else if (ent) {
+        if (!inEditBounds(cx, cy)) { setStatus(editBoundsMsg(), true); return; }
         ent.x = cx; ent.y = cy;
       }
     } else {
@@ -386,6 +476,7 @@ function handleCellClick(cx, cy) {
     return;
   }
   // placing a new entity of type == tool
+  if (!inEditBounds(cx, cy)) { setStatus(editBoundsMsg(), true); return; }
   const ent = createEntity(tool, cx, cy, {}, level);
   level.entities.push(ent);
   selectedId = ent.id;
@@ -489,8 +580,16 @@ function selectHtml(id, labelsMap, current) {
 
 function bindPropsInputs(ent) {
   const num = (id, cb) => { const el = document.getElementById(id); if (el) el.addEventListener('change', () => cb(parseFloat(el.value))); };
-  num('p-x', (v) => { ent.x = clampInt(v, 0, level.cols - 1); render(); });
-  num('p-y', (v) => { ent.y = clampInt(v, 0, level.rows - 1); render(); });
+  num('p-x', (v) => {
+    const nx = clampInt(v, 0, level.cols - 1);
+    if (!inEditBounds(nx, ent.y)) { setStatus(editBoundsMsg(), true); renderProps(); return; }
+    ent.x = nx; render();
+  });
+  num('p-y', (v) => {
+    const ny = clampInt(v, 0, level.rows - 1);
+    if (!inEditBounds(ent.x, ny)) { setStatus(editBoundsMsg(), true); renderProps(); return; }
+    ent.y = ny; render();
+  });
   num('p-w', (v) => { ent.w = Math.max(1, Math.round(v)); render(); });
   num('p-h', (v) => { ent.h = Math.max(1, Math.round(v)); render(); });
 
@@ -672,8 +771,28 @@ function bindToolbar() {
   titleInput.addEventListener('change', () => { level.title = titleInput.value; });
   // authorInput is read-only: the author is always the signed-in account's
   // name (see syncAuthorField), never free text.
-  colsInput.addEventListener('change', () => { level.cols = Math.max(8, parseInt(colsInput.value) || 20); resizeCanvas(); render(); });
-  rowsInput.addEventListener('change', () => { level.rows = Math.max(6, parseInt(rowsInput.value) || 12); resizeCanvas(); render(); });
+  colsInput.addEventListener('change', () => {
+    level.cols = Math.max(8, parseInt(colsInput.value) || 20);
+    level.editBounds = normalizeEditBounds(level.editBounds, level.cols, level.rows);
+    syncEditBoundsInputs(); resizeCanvas(); render();
+  });
+  rowsInput.addEventListener('change', () => {
+    level.rows = Math.max(6, parseInt(rowsInput.value) || 12);
+    level.editBounds = normalizeEditBounds(level.editBounds, level.cols, level.rows);
+    syncEditBoundsInputs(); resizeCanvas(); render();
+  });
+
+  ebToggle.addEventListener('change', () => {
+    if (ebToggle.checked && !level.editBounds) {
+      // first time it's turned on for this level: prefill with sensible defaults
+      ebColMin.value = DEFAULT_EDIT_BOUNDS.colMin;
+      ebColMax.value = DEFAULT_EDIT_BOUNDS.colMax;
+      ebRowMin.value = DEFAULT_EDIT_BOUNDS.rowMin;
+      ebRowMax.value = DEFAULT_EDIT_BOUNDS.rowMax;
+    }
+    applyEditBoundsFromInputs();
+  });
+  for (const el of [ebColMin, ebColMax, ebRowMin, ebRowMax]) el.addEventListener('change', applyEditBoundsFromInputs);
 
   document.getElementById('new-level').addEventListener('click', () => {
     if (!confirm('Créer un nouveau niveau vide ? Le travail non sauvegardé sera perdu.')) return;
@@ -747,10 +866,26 @@ function bindToolbar() {
   });
 
   document.getElementById('playtest-btn').addEventListener('click', togglePlaytest);
+  document.getElementById('debug-view-btn').addEventListener('click', () => {
+    if (!testEngine) return;
+    testEngine.debugTriggers = !testEngine.debugTriggers;
+    updateDebugViewBtn();
+  });
   document.getElementById('cancel-pick').addEventListener('click', () => {
     pickingTargetFor = null;
     pickBanner.classList.add('hidden');
   });
+}
+
+// While playtesting, lets you flip between the builder's "debug" view (grid,
+// trigger zones, invisible entities all revealed) and the "real" view — the
+// exact same rendering a player gets in game.html, with the grid, triggers
+// and anything marked invisible hidden.
+function updateDebugViewBtn() {
+  const btn = document.getElementById('debug-view-btn');
+  if (!playtesting || !testEngine) { btn.style.display = 'none'; return; }
+  btn.style.display = '';
+  btn.textContent = testEngine.debugTriggers ? '🎬 Voir la vraie partie' : '🐞 Revoir la vue debug';
 }
 
 function togglePlaytest() {
@@ -761,7 +896,7 @@ function togglePlaytest() {
     canvas.width = Math.min(900, level.cols * CELL);
     canvas.height = Math.min(520, level.rows * CELL);
     testEngine = new Engine(canvas, cloneLevel(level));
-    testEngine.debugTriggers = true;
+    testEngine.debugTriggers = true; // start in debug view: easiest to build with
     testEngine.start();
   } else {
     btn.textContent = '▶ Tester le niveau';
@@ -769,6 +904,7 @@ function togglePlaytest() {
     resizeCanvas();
     render();
   }
+  updateDebugViewBtn();
 }
 
 init();

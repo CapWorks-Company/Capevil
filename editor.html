@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Level Devil — Éditeur</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>😈</text></svg>">
 <link rel="stylesheet" href="css/style.css" />
 <style>
   #stage-scroll { overflow: auto; max-height: 82vh; border: 1px solid var(--border); border-radius: 8px; background: #000; }
@@ -15,6 +15,7 @@
 </style>
 </head>
 <body>
+  <script src="js/mobile-guard.js"></script>
   <div class="topbar">
     <h1><span>Level</span> Devil — Éditeur</h1>
     <nav>
@@ -33,11 +34,20 @@
       <button class="btn small" id="export-json">⭳ Exporter JSON</button>
       <label class="btn small" style="cursor:pointer;">⭱ Importer JSON<input type="file" id="import-json" accept="application/json" style="display:none;" /></label>
       <button class="btn small accent" id="playtest-btn">▶ Tester le niveau</button>
+      <button class="btn small" id="debug-view-btn" style="display:none;">🐞 Vue debug</button>
+      <div id="keybind-bar" style="display:inline-flex;"></div>
       <button class="btn small primary" id="publish-btn">🚀 Publier</button>
     </nav>
-    <div>
-      Colonnes <input type="number" id="cols-input" style="width:60px;" />
-      Lignes <input type="number" id="rows-input" style="width:60px;" />
+    <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
+      <div>
+        Colonnes <input type="number" id="cols-input" style="width:60px;" />
+        Lignes <input type="number" id="rows-input" style="width:60px;" />
+      </div>
+      <div style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><input type="checkbox" id="editbounds-toggle" style="width:auto;" />Zone d'édition verrouillée</label>
+        <span>Col.</span><input type="number" id="eb-colmin" style="width:52px;" /> – <input type="number" id="eb-colmax" style="width:52px;" />
+        <span>Lignes</span><input type="number" id="eb-rowmin" style="width:52px;" /> – <input type="number" id="eb-rowmax" style="width:52px;" />
+      </div>
     </div>
   </div>
   <div id="pick-banner" class="hidden">

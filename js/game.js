@@ -3,6 +3,7 @@ import { buildSampleLevel } from './sample-level.js';
 import { deserializeLevel } from './level-model.js';
 import { getLevel, recordPlay, recordWin, likeLevel, reportLevel, isBackendReady } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
+import { mountKeybindButton } from './keybind-ui.js';
 
 const canvas = document.getElementById('stage');
 const deathsEl = document.getElementById('deaths');
@@ -34,6 +35,7 @@ let engine = null;
 let session = null;
 
 isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; } }); });
+mountKeybindButton(document.getElementById('keybind-bar'));
 
 async function loadLevel() {
   if (remoteId) {

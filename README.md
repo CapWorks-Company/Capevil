@@ -10,16 +10,22 @@ inversion de la gravité, inversion des touches façon troll, changement de
 puissance de saut...). Une mort remet tout le niveau à zéro (triggers,
 positions, états) sauf le dernier checkpoint atteint.
 
-Inclut un éditeur de niveaux complet, des **comptes joueurs** (Supabase
-Auth) pour publier sous son vrai nom et gérer (modifier/supprimer) ses
-propres niveaux, un système de **likes**, une file de **demandes
-d'approbation** avec un espace **admin** pour promouvoir des niveaux en
-« Parties officielles », et un **signalement** réservé à ces niveaux
-officiels. Aucune étape de build : ce sont des fichiers HTML/CSS/JS
-statiques. Ce dépôt est prêt à être hébergé à la fois sur **GitHub Pages**
-et sur un **Cloudflare Worker** (Static Assets) — les deux servent
-exactement les mêmes fichiers, **Supabase est le seul vrai "backend"**
-(base de données + authentification + API).
+Inclut un éditeur de niveaux complet (avec une zone d'édition verrouillable
+pour protéger un cadre décoratif, et une bascule vue debug / vue réelle en
+playtest), des **comptes joueurs** (Supabase Auth, via une **fenêtre modale**
+de connexion/inscription) pour publier sous son vrai nom et gérer
+(modifier/supprimer) ses propres niveaux, un système de **likes**, une file
+de **demandes d'approbation** avec un espace **admin** pour promouvoir des
+niveaux en « Parties officielles », et un **signalement** réservé à ces
+niveaux officiels. Les touches (gauche/droite/haut/bas/saut) sont
+**remappables** et sauvegardées dans le navigateur. Le site affiche un
+panneau plein écran invitant à revenir sur ordinateur pour toute visite
+mobile/tablette, car le jeu comme l'éditeur sont pensés clavier + souris.
+Aucune étape de build : ce sont des fichiers HTML/CSS/JS statiques. Ce
+dépôt est prêt à être hébergé à la fois sur **GitHub Pages** et sur un
+**Cloudflare Worker** (Static Assets) — les deux servent exactement les
+mêmes fichiers, **Supabase est le seul vrai "backend"** (base de données +
+authentification + API).
 
 ## Structure du projet
 
@@ -33,7 +39,10 @@ js/engine.js      → moteur de jeu (physique, collisions, triggers/boutons, ren
 js/editor.js      → logique de l'éditeur
 js/level-model.js → format de données d'un niveau (JSON)
 js/sample-level.js → niveau de démonstration
-js/auth-ui.js     → petit widget de connexion/inscription réutilisé partout
+js/auth-ui.js     → bouton + fenêtre modale de connexion/inscription réutilisée partout
+js/keybindings.js → touches par défaut + lecture/écriture dans le navigateur
+js/keybind-ui.js  → fenêtre modale « ⌨ Touches » pour les remapper
+js/mobile-guard.js → panneau plein écran "reviens sur ordinateur" (mobile/tablette)
 js/config.js      → clés Supabase (voir ci-dessous)
 js/supabase-client.js → comptes, publication / liste / likes / approbation / signalement
 sql/schema.sql    → schéma de base de données à exécuter dans Supabase

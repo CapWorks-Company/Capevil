@@ -17,9 +17,25 @@ export function createEmptyLevel(title = 'Nouveau niveau') {
     playerStart: { x: 1, y: DEFAULT_GRID.rows - 2 },
     entities: [],
     triggers: [],
+    editBounds: null, // optional { enabled, colMin, colMax, rowMin, rowMax } — see normalizeEditBounds
     createdAt: null,
     updatedAt: null,
   };
+}
+
+// Validates/clamps an editBounds object against the level's current grid size.
+// Returns null when disabled or malformed, so callers can just check truthiness.
+export function normalizeEditBounds(eb, cols, rows) {
+  if (!eb || !eb.enabled) return null;
+  let colMin = Number.isFinite(eb.colMin) ? Math.round(eb.colMin) : 0;
+  let colMax = Number.isFinite(eb.colMax) ? Math.round(eb.colMax) : cols - 1;
+  let rowMin = Number.isFinite(eb.rowMin) ? Math.round(eb.rowMin) : 0;
+  let rowMax = Number.isFinite(eb.rowMax) ? Math.round(eb.rowMax) : rows - 1;
+  colMin = Math.max(0, Math.min(colMin, cols - 1));
+  colMax = Math.max(colMin, Math.min(colMax, cols - 1));
+  rowMin = Math.max(0, Math.min(rowMin, rows - 1));
+  rowMax = Math.max(rowMin, Math.min(rowMax, rows - 1));
+  return { enabled: true, colMin, colMax, rowMin, rowMax };
 }
 
 // Picks the lowest teleporter frequency that still has room (< max members),
@@ -210,6 +226,7 @@ export function normalizeLevel(rawLevel) {
     }
   }
   if (!level.playerStart) level.playerStart = { x: 1, y: 1 };
+  level.editBounds = normalizeEditBounds(rawLevel.editBounds, level.cols, level.rows);
   return level;
 }
 

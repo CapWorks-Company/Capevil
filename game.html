@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Level Devil — Jouer</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>😈</text></svg>">
 <link rel="stylesheet" href="css/style.css" />
 <style>
   canvas.flash { filter: brightness(2) saturate(0); }
@@ -12,11 +12,13 @@
 </style>
 </head>
 <body>
+  <script src="js/mobile-guard.js"></script>
   <div class="topbar">
     <h1><span>Level</span> Devil</h1>
     <nav>
       <a class="btn small" href="index.html">&larr; Accueil</a>
       <button class="btn small" id="restart-btn">Recommencer</button>
+      <div id="keybind-bar"></div>
     </nav>
     <div id="account-bar"></div>
   </div>
@@ -39,7 +41,7 @@
   <div class="stage-wrap">
     <canvas id="stage" width="1000" height="560"></canvas>
   </div>
-  <p class="keys-hint">Flèches / WASD pour bouger · Espace ou Haut pour sauter</p>
+  <p class="keys-hint">Touches configurables avec le bouton ⌨ Touches (en haut) — par défaut : flèches pour bouger, espace pour sauter</p>
 
   <div id="win-overlay" class="overlay hidden">
     <div class="box">
