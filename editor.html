@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Level Devil — Éditeur</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css" />
+<style>
+  #stage-scroll { overflow: auto; max-height: 82vh; border: 1px solid var(--border); border-radius: 8px; background: #000; }
+  #pick-banner { background: #f4d35e; color: #14151f; padding: 8px 14px; border-radius: 8px; margin: 8px 12px 0; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <h1><span>Level</span> Devil — Éditeur</h1>
+    <nav>
+      <a class="btn small" href="index.html">&larr; Accueil</a>
+      <input type="text" id="level-title-input" placeholder="Titre du niveau" style="width:180px;" />
+      <input type="text" id="level-author-input" placeholder="Ton nom (auteur)" style="width:140px;" />
+    </nav>
+  </div>
+
+  <div class="topbar" style="border-top:1px solid var(--border);">
+    <nav>
+      <button class="btn small" id="new-level">Nouveau</button>
+      <button class="btn small" id="save-local">💾 Sauver (local)</button>
+      <button class="btn small" id="export-json">⭳ Exporter JSON</button>
+      <label class="btn small" style="cursor:pointer;">⭱ Importer JSON<input type="file" id="import-json" accept="application/json" style="display:none;" /></label>
+      <button class="btn small accent" id="playtest-btn">▶ Tester le niveau</button>
+      <button class="btn small primary" id="publish-btn">🚀 Publier</button>
+    </nav>
+    <div>
+      Colonnes <input type="number" id="cols-input" style="width:60px;" />
+      Lignes <input type="number" id="rows-input" style="width:60px;" />
+    </div>
+  </div>
+  <div id="pick-banner" class="hidden">
+    <span>Clique sur un élément de la grille pour le choisir comme cible…</span>
+    <button class="btn small" id="cancel-pick">Annuler</button>
+  </div>
+  <div class="container" style="max-width:1300px;">
+    <p id="status-msg" class="muted" style="min-height:18px;"></p>
+    <div class="editor-layout">
+      <div id="toolbox"></div>
+      <div id="stage-scroll"><canvas id="stage" width="1440" height="560"></canvas></div>
+      <div id="props"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/editor.js"></script>
+</body>
+</html>

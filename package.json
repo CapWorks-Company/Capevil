@@ -1,0 +1,13 @@
+{
+  "name": "level-devil",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Level Devil — jeu de plateforme + éditeur de niveaux + Supabase",
+  "scripts": {
+    "dev": "npx serve .",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

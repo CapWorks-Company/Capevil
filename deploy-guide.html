@@ -1,0 +1,393 @@
+<meta charset="UTF-8">
+<title>Mise en ligne de Level Devil</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --ink:#1a1b26; --paper:#f4f5fa; --muted:#5c6082; --line:#dcdfef;
+    --surface:#ffffff; --surface-2:#eceefa;
+    --flame:#e8720a; --flame-ink:#7a3900; --ember:#d62839; --mint:#1f9c90;
+    --radius:14px;
+    --font-display:'Unbounded', system-ui, sans-serif;
+    --font-body:'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono:'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --ink:#eef0f6; --paper:#14151f; --muted:#9aa0c0; --line:#2c2e42;
+      --surface:#1b1d2c; --surface-2:#20233a;
+      --flame:#f77f00; --flame-ink:#ffd8a8; --ember:#e63946; --mint:#2ec4b6;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ink:#eef0f6; --paper:#14151f; --muted:#9aa0c0; --line:#2c2e42;
+    --surface:#1b1d2c; --surface-2:#20233a;
+    --flame:#f77f00; --flame-ink:#ffd8a8; --ember:#e63946; --mint:#2ec4b6;
+  }
+
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:var(--font-body); line-height:1.6;
+    padding:0 20px; padding-block:0 64px;
+  }
+  a{ color:var(--flame); }
+  h1,h2,h3{ font-family:var(--font-display); text-wrap:balance; line-height:1.15; margin:0; }
+  code, pre, .mono{ font-family:var(--font-mono); }
+
+  .wrap{ max-width:760px; margin:0 auto; }
+
+  /* ---------- header ---------- */
+  header{ padding-block:48px 28px; }
+  .eyebrow{
+    display:inline-flex; align-items:center; gap:8px;
+    font-family:var(--font-mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--muted); margin-bottom:14px;
+  }
+  .eyebrow .dot{ width:7px; height:7px; border-radius:50%; background:var(--flame); }
+  h1{ font-size:clamp(28px,5vw,42px); font-weight:900; }
+  h1 em{ font-style:normal; color:var(--flame); }
+  header p.lede{ font-size:17px; color:var(--muted); max-width:56ch; margin-top:12px; }
+
+  /* ---------- architecture strip ---------- */
+  .arch{
+    display:flex; gap:10px; flex-wrap:wrap; margin-top:28px;
+  }
+  .arch-card{
+    flex:1 1 180px; background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius); padding:16px 16px 14px;
+  }
+  .arch-card .k{ font-family:var(--font-mono); font-size:11px; text-transform:uppercase; letter-spacing:.07em; color:var(--muted); }
+  .arch-card .v{ font-family:var(--font-display); font-weight:700; font-size:16px; margin-top:4px; }
+  .arch-card .d{ font-size:13px; color:var(--muted); margin-top:6px; }
+  .arch-arrow{ display:flex; align-items:center; justify-content:center; color:var(--line); font-size:20px; flex:0 0 auto; }
+  @media (max-width:640px){ .arch-arrow{ transform:rotate(90deg); } }
+
+  .callout{
+    margin-top:22px; padding:14px 16px; border-radius:var(--radius);
+    background:var(--surface-2); border:1px solid var(--line);
+    font-size:14.5px; display:flex; gap:10px; align-items:flex-start;
+  }
+  .callout b{ color:var(--ink); }
+  .callout .icon{ flex:0 0 auto; font-size:16px; }
+
+  /* ---------- progress ---------- */
+  .progress{
+    position:sticky; top:0; z-index:5; background:var(--paper);
+    padding-block:14px; margin-bottom:8px; border-bottom:1px solid var(--line);
+  }
+  .progress-bar{ height:6px; background:var(--surface-2); border-radius:99px; overflow:hidden; }
+  .progress-fill{ height:100%; width:0%; background:var(--flame); transition:width .3s ease; }
+  .progress-label{ font-family:var(--font-mono); font-size:11.5px; color:var(--muted); margin-top:7px; display:flex; justify-content:space-between; }
+
+  /* ---------- stations ---------- */
+  .station{ padding-block:40px; border-bottom:1px solid var(--line); }
+  .station:last-of-type{ border-bottom:none; }
+  .station-head{ display:flex; gap:16px; align-items:baseline; }
+  .num{
+    font-family:var(--font-display); font-weight:900; font-size:15px;
+    width:34px; height:34px; border-radius:10px; flex:0 0 auto;
+    display:flex; align-items:center; justify-content:center;
+    background:var(--surface-2); color:var(--flame); border:1px solid var(--line);
+  }
+  .station h2{ font-size:22px; font-weight:700; }
+  .station .sub{ font-family:var(--font-mono); font-size:12px; color:var(--muted); margin-top:2px; }
+  .station-body{ margin-left:50px; margin-top:16px; }
+  .station-body > p{ margin:0 0 14px; color:var(--ink); }
+  .station-body > p.muted{ color:var(--muted); font-size:14.5px; }
+
+  .step{ display:flex; gap:12px; margin-bottom:16px; align-items:flex-start; }
+  .step input[type=checkbox]{
+    appearance:none; width:20px; height:20px; border-radius:6px; margin-top:2px;
+    border:1.5px solid var(--line); background:var(--surface); flex:0 0 auto; cursor:pointer;
+    display:grid; place-content:center;
+  }
+  .step input[type=checkbox]::after{
+    content:''; width:10px; height:10px; border-radius:2px; background:var(--mint); transform:scale(0); transition:transform .12s ease;
+  }
+  .step input[type=checkbox]:checked{ border-color:var(--mint); }
+  .step input[type=checkbox]:checked::after{ transform:scale(1); }
+  .step label{ font-size:15px; }
+  .step label b{ font-weight:600; }
+  .step.checked label{ color:var(--muted); text-decoration:line-through; text-decoration-color:var(--line); }
+
+  .filetree{
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px 16px; font-family:var(--font-mono); font-size:13px; color:var(--muted); margin-bottom:16px;
+    overflow-x:auto;
+  }
+  .filetree .f{ color:var(--ink); }
+
+  button:focus-visible, input:focus-visible, a:focus-visible{ outline:2px solid var(--flame); outline-offset:2px; }
+
+  .field{
+    background:var(--surface); border:1px dashed var(--line); border-radius:10px;
+    padding:10px 12px; font-family:var(--font-mono); font-size:13px; margin-bottom:14px;
+  }
+  .field .k{ color:var(--muted); }
+  .field .v{ color:var(--ink); word-break:break-all; }
+
+  .badge{
+    display:inline-block; font-family:var(--font-mono); font-size:11px; padding:2px 8px;
+    border-radius:99px; margin-left:8px; vertical-align:middle;
+  }
+  .badge.gh{ background:#e8eaf6; color:#3a3f6e; }
+  .badge.cf{ background:#ffe6cc; color:#7a3900; }
+  .badge.sb{ background:#d7f4ee; color:#0d5c52; }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]) .badge.gh{ background:#262a44; color:#c7cbf0; }
+    :root:not([data-theme="light"]) .badge.cf{ background:#3a2a14; color:#ffcf94; }
+    :root:not([data-theme="light"]) .badge.sb{ background:#123a34; color:#8fe9db; }
+  }
+  :root[data-theme="dark"] .badge.gh{ background:#262a44; color:#c7cbf0; }
+  :root[data-theme="dark"] .badge.cf{ background:#3a2a14; color:#ffcf94; }
+  :root[data-theme="dark"] .badge.sb{ background:#123a34; color:#8fe9db; }
+
+  details.faq{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:4px 16px; margin-bottom:10px; }
+  details.faq summary{ cursor:pointer; padding:12px 0; font-weight:600; font-size:14.5px; }
+  details.faq p{ margin:0 0 14px; color:var(--muted); font-size:14px; }
+
+  footer{ padding-top:36px; color:var(--muted); font-size:13px; }
+
+  @media (prefers-reduced-motion: reduce){ *{ transition:none !important; animation:none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow"><span class="dot"></span> Guide de mise en ligne</div>
+    <h1>Level Devil, en <em>ligne</em>, de A à Z</h1>
+    <p class="lede">Trois services, un seul jeu : le code vit sur GitHub, le site est servi en double (GitHub Pages et un Worker Cloudflare), et Supabase est la vraie base — la seule pièce qui fait office de "backend".</p>
+
+    <div class="arch">
+      <div class="arch-card">
+        <div class="k">Étape 1 · Code</div>
+        <div class="v">GitHub</div>
+        <div class="d">Dépôt du code source + hébergement gratuit via GitHub Pages.</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-card">
+        <div class="k">Étape 2 · Miroir</div>
+        <div class="v">Cloudflare Worker</div>
+        <div class="d">Sert exactement les mêmes fichiers statiques, aucune ligne de code serveur.</div>
+      </div>
+      <div class="arch-arrow">→</div>
+      <div class="arch-card">
+        <div class="k">Étape 3 · Données</div>
+        <div class="v">Supabase</div>
+        <div class="d">Base de données + API : les niveaux publiés, jouables partout.</div>
+      </div>
+    </div>
+
+    <div class="callout">
+      <span class="icon">💡</span>
+      <span><b>Il n'y a pas de "serveur" séparé.</b> GitHub Pages et le Worker Cloudflare affichent tous les deux le même site statique (HTML/CSS/JS) ; Supabase EST le backend. Avoir les deux hébergements est utile comme miroir/sauvegarde, pas pour répartir un travail entre eux.</span>
+    </div>
+    <div class="callout">
+      <span class="icon">🖱️</span>
+      <span><b>Zéro ligne de commande.</b> Tout ce guide se fait à la souris, dans le navigateur : upload de fichiers sur github.com, boutons dans le dashboard Cloudflare, éditeur SQL de Supabase. Ni Git, ni Wrangler à installer.</span>
+    </div>
+  </header>
+
+  <div class="progress">
+    <div class="progress-bar"><div class="progress-fill" id="pf"></div></div>
+    <div class="progress-label"><span id="pl">0 / 15 étapes</span><span>Ta progression est mémorisée dans ce navigateur</span></div>
+  </div>
+
+  <!-- ============================================================ -->
+  <section class="station">
+    <div class="station-head">
+      <div class="num">1</div>
+      <div>
+        <h2>Préparer le dossier <span class="badge gh">GitHub</span></h2>
+        <div class="sub">à faire une seule fois, en local</div>
+      </div>
+    </div>
+    <div class="station-body">
+      <p>Dézippe le projet que je t'ai envoyé (<code>level-devil.zip</code>). Il contient déjà tout, y compris tes clés Supabase :</p>
+      <div class="filetree">level-devil/<br>├─ <span class="f">index.html</span>, <span class="f">game.html</span>, <span class="f">editor.html</span><br>├─ css/, js/ &nbsp;<span style="opacity:.7">— le jeu, l'éditeur, le moteur</span><br>├─ sql/schema.sql &nbsp;<span style="opacity:.7">— à coller dans Supabase (étape 5)</span><br>├─ wrangler.toml &nbsp;<span style="opacity:.7">— lu automatiquement par Cloudflare, tu n'y touches pas</span><br>└─ README.md</div>
+      <p class="muted">Retiens bien l'emplacement de ce dossier — à l'étape suivante, c'est <b>son contenu</b> (pas le dossier lui-même) qu'on glissera dans GitHub.</p>
+
+      <div class="step"><input type="checkbox" id="s1"><label for="s1">Le dossier <code>level-devil/</code> est décompressé sur ton ordinateur</label></div>
+      <div class="step"><input type="checkbox" id="s2"><label for="s2">Tu as un compte sur <a href="https://github.com/join" target="_blank" rel="noopener">github.com</a> (gratuit)</label></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="station">
+    <div class="station-head">
+      <div class="num">2</div>
+      <div>
+        <h2>Créer le dépôt et uploader les fichiers <span class="badge gh">GitHub</span></h2>
+        <div class="sub">github.com/new → glisser-déposer</div>
+      </div>
+    </div>
+    <div class="station-body">
+      <p>Sur <a href="https://github.com/new" target="_blank" rel="noopener">github.com/new</a> : nom <code>level-devil</code>, visibilité publique, <b>ne coche aucune case</b> (pas de README/licence — on a déjà les fichiers). Clique <b>Create repository</b>.</p>
+      <p>Tu arrives sur un dépôt vide, avec un lien bleu <b>« uploading an existing file »</b> au milieu de la page (ou plus tard, le bouton <b>Add file → Upload files</b> en haut à droite). Clique dessus.</p>
+
+      <div class="callout" style="border-color:var(--ember);">
+        <span class="icon">⚠️</span>
+        <span><b>Le détail qui compte :</b> ouvre le dossier <code>level-devil</code> sur ton ordinateur, sélectionne <u>tout ce qu'il y a dedans</u> (<code>index.html</code>, <code>css</code>, <code>js</code>, <code>sql</code>, <code>wrangler.toml</code>…) puis glisse cette sélection dans la zone d'upload. Ne glisse pas le dossier <code>level-devil</code> lui-même, sinon tout se retrouve un niveau trop bas et rien ne fonctionnera.</span>
+      </div>
+
+      <p class="muted">Glisser un dossier entier (comme <code>css</code> ou <code>js</code>) fonctionne : GitHub garde l'arborescence. Ce projet fait ~25 fichiers, largement sous la limite de 100 fichiers / 25 Mo chacun d'un upload web.</p>
+      <p>Une fois les fichiers listés, écris un message en bas (ex. <code>Premier envoi</code>) et clique <b>Commit changes</b>.</p>
+
+      <div class="step"><input type="checkbox" id="s3"><label for="s3">Le dépôt <b>level-devil</b> existe sur GitHub</label></div>
+      <div class="step"><input type="checkbox" id="s4"><label for="s4">Après le commit, <code>index.html</code> est bien à la racine du dépôt, et les dossiers <code>css/</code>, <code>js/</code>, <code>sql/</code> apparaissent à côté (pas de double dossier <code>level-devil/level-devil</code>)</label></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="station">
+    <div class="station-head">
+      <div class="num">3</div>
+      <div>
+        <h2>Activer GitHub Pages <span class="badge gh">GitHub</span></h2>
+        <div class="sub">Settings → Pages</div>
+      </div>
+    </div>
+    <div class="station-body">
+      <p>Dans ton dépôt : <b>Settings → Pages</b> (menu de gauche) → sous <b>Build and deployment</b>, choisis <b>Source : Deploy from a branch</b>, puis <b>Branch : main</b> et dossier <b>/ (root)</b> → <b>Save</b>.</p>
+      <p class="muted">GitHub prend une à deux minutes pour publier la première fois. L'URL apparaît en haut de cette même page une fois prêt.</p>
+      <div class="field"><span class="k">Ton site sera à :</span><br><span class="v">https://TON-PSEUDO.github.io/level-devil/</span></div>
+
+      <div class="step"><input type="checkbox" id="s5"><label for="s5">GitHub Pages est activé (le bandeau vert "Your site is live at…" est apparu)</label></div>
+      <div class="step"><input type="checkbox" id="s6"><label for="s6">L'URL <code>.github.io</code> affiche bien la page d'accueil de Level Devil</label></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="station">
+    <div class="station-head">
+      <div class="num">4</div>
+      <div>
+        <h2>Connecter ton Worker à GitHub <span class="badge cf">Cloudflare</span></h2>
+        <div class="sub">dashboard → Settings → Builds</div>
+      </div>
+    </div>
+    <div class="station-body">
+      <p>Cloudflare peut surveiller ton dépôt GitHub et redéployer ton Worker tout seul à chaque changement — via le dashboard, sans rien installer. Sur <a href="https://dash.cloudflare.com" target="_blank" rel="noopener">dash.cloudflare.com</a> :</p>
+      <div class="step" style="margin-bottom:10px;"><span class="num" style="width:22px;height:22px;font-size:11px;">1</span><label>Workers & Pages → clique sur ton Worker existant <code>leveldevil</code></label></div>
+      <div class="step" style="margin-bottom:10px;"><span class="num" style="width:22px;height:22px;font-size:11px;">2</span><label>Onglet <b>Settings → Builds</b> → à côté de <b>Git Repository</b>, clique <b>Connect</b> / <b>Manage</b></label></div>
+      <div class="step" style="margin-bottom:10px;"><span class="num" style="width:22px;height:22px;font-size:11px;">3</span><label>Autorise Cloudflare sur GitHub, puis choisis le dépôt <code>level-devil</code></label></div>
+      <div class="step" style="margin-bottom:16px;"><span class="num" style="width:22px;height:22px;font-size:11px;">4</span><label>Laisse les réglages par défaut (branche <code>main</code>, build command <i>vide</i>, deploy command <code>npx wrangler deploy</code>) → <b>Save and Deploy</b></label></div>
+
+      <div class="field"><span class="k">Ce qui se passe ensuite :</span><br><span class="v">Cloudflare lance un premier build automatiquement, visible dans l'onglet <b>Deployments</b>. Chaque futur commit sur GitHub en relancera un nouveau — sans que tu aies à revenir ici.</span></div>
+
+      <div class="step"><input type="checkbox" id="s7"><label for="s7">Le dépôt <code>level-devil</code> apparaît comme connecté dans Settings → Builds</label></div>
+      <div class="step"><input type="checkbox" id="s8"><label for="s8">Le premier déploiement est marqué <b>Success</b> dans l'onglet Deployments</label></div>
+      <div class="step"><input type="checkbox" id="s9"><label for="s9"><a href="https://leveldevil.capkychannel.workers.dev" target="_blank" rel="noopener">leveldevil.capkychannel.workers.dev</a> affiche la page d'accueil du jeu</label></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="station">
+    <div class="station-head">
+      <div class="num">5</div>
+      <div>
+        <h2>Créer la base de données <span class="badge sb">Supabase</span></h2>
+        <div class="sub">SQL Editor → coller → Run</div>
+      </div>
+    </div>
+    <div class="station-body">
+      <p><code>js/config.js</code> contient déjà l'URL et la clé de ton projet Supabase. Il ne reste qu'à créer la table. Sur <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">ton tableau de bord Supabase</a> → ouvre ton projet → <b>SQL Editor → New query</b> → colle le contenu de <code>sql/schema.sql</code> → <b>Run</b>.</p>
+      <div class="field"><span class="k">Ça crée :</span><br><span class="v">table <b>levels</b> · règles de sécurité (RLS) · fonction de comptage des parties</span></div>
+      <p class="muted">Vérifie ensuite dans <b>Table Editor</b> : une table <code>levels</code> vide doit apparaître (0 lignes, c'est normal — personne n'a encore publié de niveau).</p>
+
+      <div class="step"><input type="checkbox" id="s10"><label for="s10">Le script SQL s'est exécuté sans erreur ("Success. No rows returned")</label></div>
+      <div class="step"><input type="checkbox" id="s11"><label for="s11">La table <b>levels</b> est visible dans Table Editor</label></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="station">
+    <div class="station-head">
+      <div class="num">6</div>
+      <div>
+        <h2>Vérification finale</h2>
+        <div class="sub">les trois pièces ensemble</div>
+      </div>
+    </div>
+    <div class="station-body">
+      <p>Le vrai test : publier un niveau depuis une URL et le retrouver sur l'autre — la preuve que Supabase relie bien les deux hébergements.</p>
+
+      <div class="step"><input type="checkbox" id="s12"><label for="s12">Sur l'URL <b>GitHub Pages</b>, la démo (<code>game.html</code>) se termine sans erreur bloquante</label></div>
+      <div class="step"><input type="checkbox" id="s13"><label for="s13">Dans l'<b>éditeur</b>, création d'un petit niveau + bouton <b>🚀 Publier</b> → message "Publié ✓"</label></div>
+      <div class="step"><input type="checkbox" id="s14"><label for="s14">Ce niveau apparaît dans la liste des niveaux publiés sur l'URL <b>Cloudflare</b> aussi</label></div>
+      <div class="step"><input type="checkbox" id="s15"><label for="s15">Les compteurs "parties / victoires" augmentent après une partie jouée</label></div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section class="station" style="border-bottom:none;">
+    <div class="station-head">
+      <div class="num">↻</div>
+      <div>
+        <h2>Mettre à jour le site plus tard</h2>
+        <div class="sub">après une modification du code</div>
+      </div>
+    </div>
+    <div class="station-body">
+      <p>Comme tout part de GitHub, une seule action met à jour les deux hébergements. Ouvre le fichier à modifier dans ton dépôt GitHub, clique l'icône crayon ✏️ en haut à droite pour l'éditer directement dans le navigateur (ou <b>Add file → Upload files</b> pour remplacer plusieurs fichiers d'un coup — même chemin = remplacement), puis <b>Commit changes</b>.</p>
+      <div class="field"><span class="k">Ce que ce seul commit déclenche :</span><br><span class="v">GitHub Pages republie en quelques secondes · Cloudflare détecte le commit et relance un build (Settings → Builds → Deployments)</span></div>
+
+      <details class="faq">
+        <summary>La page GitHub Pages affiche une 404</summary>
+        <p>Vérifie que le dossier choisi dans Settings → Pages est bien <code>/ (root)</code> et que <code>index.html</code> est à la racine du dépôt — pas dans un sous-dossier <code>level-devil/</code> créé par erreur si tu avais glissé le dossier entier au lieu de son contenu (étape 2).</p>
+      </details>
+      <details class="faq">
+        <summary>Le Worker Cloudflare ne se met pas à jour après un commit</summary>
+        <p>Va dans <b>Settings → Builds</b> : vérifie que <code>level-devil</code> est bien listé comme dépôt connecté et que la branche surveillée est <code>main</code>. L'onglet <b>Deployments</b> montre le journal de chaque tentative, avec le message d'erreur si un build a échoué.</p>
+      </details>
+      <details class="faq">
+        <summary>Je ne retrouve pas mon Worker "leveldevil" dans le dashboard</summary>
+        <p>Vérifie en haut à gauche du dashboard que tu es bien connecté au compte Cloudflare qui possède <code>capkychannel</code> — un même email peut avoir accès à plusieurs comptes.</p>
+      </details>
+      <details class="faq">
+        <summary>La publication d'un niveau échoue dans l'éditeur</summary>
+        <p>Vérifie que le script <code>sql/schema.sql</code> a bien été exécuté (étape 5) et que <code>js/config.js</code> contient ton URL et ta clé Supabase (déjà fait dans ce dépôt). Le message d'erreur exact s'affiche sous la barre d'outils de l'éditeur.</p>
+      </details>
+      <details class="faq">
+        <summary>Puis-je utiliser un nom de domaine perso (ex: leveldevil.com) ?</summary>
+        <p>Oui : achète le domaine, ajoute-le à ton compte Cloudflare (DNS), puis crée une route personnalisée pour ton Worker (Cloudflare → Workers & Pages → ton Worker → Settings → Domains &amp; Routes), ou configure un domaine personnalisé dans Settings → Pages côté GitHub. Aucun changement de code nécessaire.</p>
+      </details>
+    </div>
+  </section>
+
+  <footer>Level Devil — jeu, éditeur et niveaux communautaires. Guide généré pour ton déploiement du <span id="today"></span>.</footer>
+</div>
+
+<script>
+(function(){
+  try {
+    document.getElementById('today').textContent = new Date().toLocaleDateString('fr-FR', { year:'numeric', month:'long', day:'numeric' });
+  } catch(e) {}
+
+  var boxes = Array.prototype.slice.call(document.querySelectorAll('.step input[type=checkbox]'));
+  var KEY = 'leveldevil_deploy_progress';
+
+  function load(){
+    try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){ return {}; }
+  }
+  function save(state){
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch(e){ /* ignore */ }
+  }
+  function updateProgress(){
+    var done = boxes.filter(function(b){ return b.checked; }).length;
+    var pct = boxes.length ? Math.round(done / boxes.length * 100) : 0;
+    document.getElementById('pf').style.width = pct + '%';
+    document.getElementById('pl').textContent = done + ' / ' + boxes.length + ' étapes';
+  }
+  var state = load();
+  boxes.forEach(function(b){
+    if (state[b.id]) { b.checked = true; b.closest('.step').classList.add('checked'); }
+    b.addEventListener('change', function(){
+      b.closest('.step').classList.toggle('checked', b.checked);
+      var s = load(); s[b.id] = b.checked; save(s);
+      updateProgress();
+    });
+  });
+  updateProgress();
+})();
+</script>

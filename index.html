@@ -1,3 +1,45 @@
-<html>
-  <div>Site en cours de construction</div>
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Level Devil</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1><span>Level</span> Devil</h1>
+    <nav>
+      <a class="btn small" href="game.html">Jouer la démo</a>
+      <a class="btn small primary" href="editor.html">+ Créer un niveau</a>
+    </nav>
+  </div>
+
+  <div class="container">
+    <div id="backend-warning" class="card hidden" style="border-color:#e63946;background:#3a1a1f;">
+      ⚠️ La base de données Supabase n'est pas encore configurée (voir <code>js/config.js</code>).
+      Les niveaux publiés ne sont pas encore disponibles, mais tu peux quand même créer et jouer
+      des niveaux enregistrés localement dans ton navigateur ci-dessous.
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <h2 style="margin:0;">Niveaux publiés par la communauté</h2>
+        <input type="search" id="search" placeholder="Rechercher un niveau…" />
+      </div>
+      <table style="margin-top:14px;">
+        <thead><tr><th>Titre</th><th>Auteur</th><th>Stats</th><th></th></tr></thead>
+        <tbody id="levels-list"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Mes brouillons (sauvegardés dans ce navigateur)</h2>
+      <div id="local-list"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/home.js"></script>
+</body>
 </html>
