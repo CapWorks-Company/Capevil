@@ -8,6 +8,9 @@
 <link rel="stylesheet" href="css/style.css" />
 <style>
   #stage-scroll { overflow: auto; max-height: 82vh; border: 1px solid var(--border); border-radius: 8px; background: #000; }
+  /* The editor grid must render at exact 1-cell-per-40px, never squished by
+     the shared canvas{max-width:100%} rule — large levels scroll instead. */
+  #stage-scroll canvas#stage { max-width: none; width: auto; height: auto; display: block; }
   #pick-banner { background: #f4d35e; color: #14151f; padding: 8px 14px; border-radius: 8px; margin: 8px 12px 0; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
 </style>
 </head>
@@ -17,13 +20,15 @@
     <nav>
       <a class="btn small" href="index.html">&larr; Accueil</a>
       <input type="text" id="level-title-input" placeholder="Titre du niveau" style="width:180px;" />
-      <input type="text" id="level-author-input" placeholder="Ton nom (auteur)" style="width:140px;" />
+      <input type="text" id="level-author-input" placeholder="Auteur (connecte-toi)" style="width:160px;" readonly />
     </nav>
+    <div id="account-bar"></div>
   </div>
 
   <div class="topbar" style="border-top:1px solid var(--border);">
     <nav>
       <button class="btn small" id="new-level">Nouveau</button>
+      <button class="btn small" id="load-demo">🎓 Charger la démo</button>
       <button class="btn small" id="save-local">💾 Sauver (local)</button>
       <button class="btn small" id="export-json">⭳ Exporter JSON</button>
       <label class="btn small" style="cursor:pointer;">⭱ Importer JSON<input type="file" id="import-json" accept="application/json" style="display:none;" /></label>

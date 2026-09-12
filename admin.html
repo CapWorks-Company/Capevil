@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Level Devil — Admin</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <div class="topbar">
+    <h1><span>Level</span> Devil — Admin</h1>
+    <nav>
+      <a class="btn small" href="index.html">&larr; Accueil</a>
+    </nav>
+  </div>
+
+  <div class="container" style="max-width:760px;">
+    <div id="backend-warning" class="card hidden" style="border-color:#e63946;background:#3a1a1f;">
+      ⚠️ La base de données Supabase n'est pas encore configurée (voir <code>js/config.js</code>).
+    </div>
+
+    <div id="login-card" class="card">
+      <h2 style="margin-top:0;">Connexion admin</h2>
+      <p class="muted">
+        Les comptes joueurs se créent librement depuis la page d'accueil, mais le statut
+        <strong>admin</strong> ne se donne pas tout seul : après avoir créé (ou choisi) un
+        compte, le propriétaire du site l'élève une seule fois en admin directement dans
+        <strong>Supabase Dashboard → SQL Editor</strong> avec :
+      </p>
+      <pre style="background:#10111a;border:1px solid var(--border);border-radius:8px;padding:10px;font-size:12px;overflow-x:auto;">update public.profiles set is_admin = true
+where id = (select id from auth.users where email = 'ton-email@exemple.com');</pre>
+      <p class="muted">Connecte-toi ci-dessous avec ce compte pour approuver des niveaux et gérer les signalements.</p>
+      <div id="account-bar"></div>
+      <p id="login-error" class="muted" style="color:#ff8a8a;"></p>
+    </div>
+
+    <div id="not-admin-card" class="card hidden" style="border-color:#e63946;">
+      Ce compte est connecté mais n'a pas le statut admin (voir l'explication ci-dessus).
+    </div>
+
+    <div id="admin-panel" class="card hidden">
+      <h2 style="margin-top:0;">Demandes d'approbation en attente</h2>
+      <p class="muted">
+        Accepter une partie l'affiche dans « Parties officielles » sur la page d'accueil,
+        avec la description « Ce niveau à été approuvé par un admin. ».
+      </p>
+      <div id="pending-list"></div>
+    </div>
+
+    <div id="reports-card" class="card hidden">
+      <h2 style="margin-top:0;">Signalements sur les parties officielles</h2>
+      <div id="reports-list"></div>
+    </div>
+
+    <div id="all-levels-card" class="card hidden">
+      <h2 style="margin-top:0;">Toutes les parties officielles (retirer le statut)</h2>
+      <div id="all-list"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/admin.js"></script>
+</body>
+</html>

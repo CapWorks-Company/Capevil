@@ -13,7 +13,9 @@
     <nav>
       <a class="btn small" href="game.html">Jouer la démo</a>
       <a class="btn small primary" href="editor.html">+ Créer un niveau</a>
+      <a class="btn small" href="admin.html" title="Espace admin">🛡 Admin</a>
     </nav>
+    <div id="account-bar"></div>
   </div>
 
   <div class="container">
@@ -25,6 +27,17 @@
 
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+        <h2 style="margin:0;">🏅 Parties officielles</h2>
+      </div>
+      <p class="muted" style="margin-top:6px;">Ce niveau à été approuvé par un admin.</p>
+      <table style="margin-top:10px;">
+        <thead><tr><th>Titre</th><th>Auteur</th><th>Stats</th><th></th></tr></thead>
+        <tbody id="official-list"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
         <h2 style="margin:0;">Niveaux publiés par la communauté</h2>
         <input type="search" id="search" placeholder="Rechercher un niveau…" />
       </div>
@@ -32,6 +45,12 @@
         <thead><tr><th>Titre</th><th>Auteur</th><th>Stats</th><th></th></tr></thead>
         <tbody id="levels-list"></tbody>
       </table>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-top:0;">Mes niveaux publiés</h2>
+      <p class="muted" id="my-levels-hint">Connecte-toi pour voir et gérer (modifier / supprimer) les niveaux publiés avec ton compte.</p>
+      <div id="my-levels-list"></div>
     </div>
 
     <div class="card">

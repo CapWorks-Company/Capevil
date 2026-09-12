@@ -2,7 +2,7 @@
 // Framework-free, canvas 2D. Designed to be driven by game.js (play mode)
 // and reused (read-only, no input) by editor.js for in-editor testing.
 import {
-  CELL, ENTITY_TYPES, ENTITY_STATES, HAZARD_TYPES, SOLID_TYPES,
+  CELL, ENTITY_TYPES, HAZARD_TYPES, SOLID_TYPES,
   GRAVITY_VECTORS, ACTION_TYPES, TRIGGER_MODES, PHYSICS,
 } from './constants.js';
 
@@ -44,6 +44,10 @@ export class Engine {
     if (val) this._lastJumpPress = k === 'jump' ? performance.now() : this._lastJumpPress;
   }
 
+  // Full reset: used both on first load and every time the player dies, so a
+  // death always puts the whole level back exactly how it was (triggers can
+  // fire again, moved platforms go back to their start, states/gravity/troll
+  // effects are cleared) — only the checkpoint respawn point survives.
   reset() {
     const lvl = this.level;
     this.deaths = this.deaths || 0;
@@ -51,6 +55,35 @@ export class Engine {
     this.won = false;
     this.dead = false;
     this.respawn = { x: lvl.playerStart.x, y: lvl.playerStart.y };
+    this._buildRuntime();
+    this._resetPlayer();
+    this.scheduled = []; // [{time, run}]
+    this._teleportCooldown = 0;
+    this.camera = { x: 0, y: 0 };
+    this.onStateChange({ deaths: this.deaths });
+  }
+
+  _buildRuntime() {
+    this.runtime = new Map();
+    for (const ent of this.level.entities) {
+      this.runtime.set(ent.id, {
+        def: ent,
+        x: ent.x * CELL, y: ent.y * CELL,
+        passable: !!ent.passable, invisible: !!ent.invisible, harmless: !!ent.harmless,
+        anim: null, // { fromX,fromY,toX,toY,startTime,duration }
+        dx: 0, dy: 0, // this-frame movement delta, for carrying the player along
+        angle: 0,
+        firedOnce: false,
+        wasOverlapping: false,
+        activated: false,
+        usedOnce: false,
+        buttonReadyAt: 0,
+      });
+    }
+  }
+
+  _resetPlayer() {
+    const lvl = this.level;
     this.player = {
       x: this.respawn.x * CELL, y: this.respawn.y * CELL,
       w: CELL * 0.7, h: CELL * 0.7,
@@ -60,28 +93,28 @@ export class Engine {
       jumpMult: 1, speedMult: 1,
       onGround: false,
       facing: 1,
+      windVx: 0, windVy: 0, // persistent push from FAN zones, layered on top of input-driven velocity
     };
     // center the smaller hitbox inside its cell
     this.player.x += (CELL - this.player.w) / 2;
     this.player.y += (CELL - this.player.h) / 2;
+  }
 
-    this.runtime = new Map();
-    for (const ent of lvl.entities) {
-      this.runtime.set(ent.id, {
-        def: ent,
-        x: ent.x * CELL, y: ent.y * CELL,
-        state: ent.state || ENTITY_STATES.NORMAL,
-        anim: null, // { fromX,fromY,toX,toY,startTime,duration }
-        dx: 0, dy: 0, // this-frame movement delta, for carrying the player along
-        angle: 0,
-        firedOnce: false,
-        wasOverlapping: false,
-        activated: false,
-      });
+  // Puts every runtime entity back to its authored definition (position,
+  // toggles, animation) and clears trigger/scheduled-action state, without
+  // touching `this.respawn` (checkpoints must survive a death).
+  _resetRuntimeState() {
+    this.scheduled = [];
+    this._teleportCooldown = 0;
+    for (const rt of this.runtime.values()) {
+      const def = rt.def;
+      rt.x = def.x * CELL; rt.y = def.y * CELL;
+      rt.passable = !!def.passable; rt.invisible = !!def.invisible; rt.harmless = !!def.harmless;
+      rt.anim = null; rt.dx = 0; rt.dy = 0; rt.angle = 0;
+      rt.firedOnce = false; rt.wasOverlapping = false; rt.usedOnce = false;
+      rt.buttonReadyAt = 0;
+      if (def.type !== ENTITY_TYPES.CHECKPOINT) rt.activated = false;
     }
-    this.scheduled = []; // [{time, run: fn}]
-    this.camera = { x: 0, y: 0 };
-    this.onStateChange({ deaths: this.deaths });
   }
 
   start() {
@@ -114,18 +147,9 @@ export class Engine {
     this.onDeath();
     setTimeout(() => {
       this.dead = false;
-      this._respawnPlayer();
+      this._resetRuntimeState();
+      this._resetPlayer();
     }, 450);
-  }
-
-  _respawnPlayer() {
-    const p = this.player;
-    p.x = this.respawn.x * CELL + (CELL - p.w) / 2;
-    p.y = this.respawn.y * CELL + (CELL - p.h) / 2;
-    p.vx = 0; p.vy = 0;
-    p.gravityDir = 'down';
-    p.invert = { horizontal: false, vertical: false };
-    p.jumpMult = 1; p.speedMult = 1;
   }
 
   winLevel() {
@@ -137,12 +161,16 @@ export class Engine {
   // ---------------------------------------------------------------- update
   update(dt) {
     this.simTime += dt;
+    if (this._teleportCooldown > 0) this._teleportCooldown -= dt;
     this._runScheduled();
     this._updateMovers(dt);
+    this._applyFans(dt);
     this._updatePhysics(dt);
     this._updateSpinnerAngles(dt);
     this._checkTriggers();
+    this._checkButtons();
     this._checkHazardsAndGoal();
+    this._checkTeleporters();
     this._updateCamera();
   }
 
@@ -177,12 +205,43 @@ export class Engine {
     }
   }
 
+  // Continuous wind push from FAN zones while the player overlaps them
+  // (unlike a spring's one-shot impulse). Left/right is the main use case
+  // requested, but any direction works. Builds up in `player.windVx/windVy`
+  // — a persistent contribution layered on top of whatever `_updatePhysics`
+  // computes for input/gravity that same frame — rather than writing
+  // straight into `vx`/`vy`, which would get overwritten immediately by the
+  // movement-axis input logic (that logic unconditionally sets velocity from
+  // the arrow keys each frame, Level-Devil-style, with no separate friction
+  // step to layer external forces onto).
+  _applyFans(dt) {
+    const p = this.player;
+    let pushedX = false, pushedY = false;
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.FAN || rt.passable) continue;
+      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      if (!this._overlap(p, box)) continue;
+      const dir = (rt.def.props && rt.def.props.direction) || 'right';
+      const v = GRAVITY_VECTORS[dir];
+      const force = (rt.def.props && rt.def.props.force) ?? 1;
+      const accel = PHYSICS.GRAVITY_ACCEL * force;
+      const maxSpeed = PHYSICS.MOVE_SPEED * 1.8 * force;
+      if (v.x) { pushedX = true; p.windVx += v.x * accel * dt; p.windVx = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVx)); }
+      if (v.y) { pushedY = true; p.windVy += v.y * accel * dt; p.windVy = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVy)); }
+    }
+    // decay back to zero once the player leaves every fan zone
+    if (!pushedX) p.windVx *= 0.8;
+    if (!pushedY) p.windVy *= 0.8;
+    if (Math.abs(p.windVx) < 1) p.windVx = 0;
+    if (Math.abs(p.windVy) < 1) p.windVy = 0;
+  }
+
   _solidRects() {
     const rects = [];
     for (const rt of this.runtime.values()) {
       const t = rt.def.type;
       if (!SOLID_TYPES.has(t)) continue;
-      if (rt.state === ENTITY_STATES.PASSABLE || rt.state === ENTITY_STATES.INVISIBLE) continue;
+      if (rt.passable) continue; // invisible solids are still fully solid
       rects.push({ id: rt.def.id, x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL, dx: rt.dx || 0, dy: rt.dy || 0 });
     }
     return rects;
@@ -218,6 +277,12 @@ export class Engine {
       if (input.down) mv += 1;
       p.vy = mv * speed;
     }
+
+    // layer the fan's wind push on top of the input-driven velocity we just
+    // set above (added here, not inside _applyFans, so it survives the
+    // unconditional overwrite the movement-axis code above just did)
+    p.vx += p.windVx;
+    p.vy += p.windVy;
 
     // jump: impulse opposite gravity direction
     if (input.jump && p.onGround) {
@@ -279,10 +344,10 @@ export class Engine {
       if (!this._overlap(p, box)) continue;
 
       if (HAZARD_TYPES.has(t)) {
-        if (rt.state === ENTITY_STATES.NORMAL) this.killPlayer();
+        if (!rt.harmless && !rt.passable) this.killPlayer();
         continue;
       }
-      if (t === ENTITY_TYPES.SPRING && rt.state !== ENTITY_STATES.INVISIBLE) {
+      if (t === ENTITY_TYPES.SPRING && !rt.passable) {
         const dir = (rt.def.props && rt.def.props.direction) || 'up';
         const power = ((rt.def.props && rt.def.props.power) || 1.6) * PHYSICS.JUMP_POWER;
         const v = GRAVITY_VECTORS[dir]; // direct push direction (not opposed like gravity)
@@ -298,6 +363,37 @@ export class Engine {
     }
   }
 
+  // Teleporters sharing the same `frequency` cycle the player through the
+  // group in authored order. A `oneUse` teleporter disables only itself
+  // (its entrance) once used, so you can't walk straight back through it.
+  _checkTeleporters() {
+    if (this._teleportCooldown > 0) return;
+    const p = this.player;
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.TELEPORTER) continue;
+      if (rt.passable || rt.usedOnce) continue;
+      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      if (!this._overlap(p, box)) continue;
+      this._teleportViaGroup(rt);
+      break; // at most one teleport per frame
+    }
+  }
+
+  _teleportViaGroup(rt) {
+    const freq = (rt.def.props && rt.def.props.frequency) || 1;
+    const group = this.level.entities.filter(e => e.type === ENTITY_TYPES.TELEPORTER && ((e.props && e.props.frequency) || 1) === freq);
+    if (group.length < 2) return;
+    const idx = group.findIndex(e => e.id === rt.def.id);
+    const nextDef = group[(idx + 1) % group.length];
+    const targetRt = this.runtime.get(nextDef.id);
+    if (!targetRt) return;
+    const p = this.player;
+    p.x = targetRt.x + (nextDef.w * CELL - p.w) / 2;
+    p.y = targetRt.y + (nextDef.h * CELL - p.h) / 2;
+    this._teleportCooldown = 0.5;
+    if (rt.def.props && rt.def.props.oneUse) rt.usedOnce = true;
+  }
+
   _checkTriggers() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
@@ -311,6 +407,8 @@ export class Engine {
           if (!rt.firedOnce) { rt.firedOnce = true; this._fireTrigger(rt); }
         } else if (mode === TRIGGER_MODES.REPEAT) {
           this._fireTrigger(rt);
+        } else if (mode === TRIGGER_MODES.LOOP) {
+          if (!rt.firedOnce) { rt.firedOnce = true; this._startLoop(rt); }
         }
       }
       if (!overlapping && rt.wasOverlapping && mode === TRIGGER_MODES.ON_EXIT) {
@@ -318,6 +416,39 @@ export class Engine {
       }
       rt.wasOverlapping = overlapping;
     }
+  }
+
+  // A button is a visible, physical switch: unlike a trigger it can be
+  // pressed again and again, gated only by its own reset cooldown — no
+  // "once/repeat/onExit" mode to configure. Fires on entry (edge-triggered,
+  // like triggers) whenever the cooldown from its last press has elapsed.
+  _checkButtons() {
+    const p = this.player;
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.BUTTON) continue;
+      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      const overlapping = this._overlap(p, box);
+      if (overlapping && !rt.wasOverlapping && this.simTime >= rt.buttonReadyAt) {
+        this._fireTrigger(rt);
+        const cooldown = Math.max(0.05, (rt.def.props && rt.def.props.cooldown) ?? 1);
+        rt.buttonReadyAt = this.simTime + cooldown;
+      }
+      rt.wasOverlapping = overlapping;
+    }
+  }
+
+  // Fires the trigger's action list once, then re-schedules itself after
+  // `loopInterval` seconds — an autonomous, self-repeating behaviour (e.g.
+  // "go left 3 cells, wait 1s, come back, wait 2s...") that keeps running
+  // without the player needing to re-enter the zone. Cleared automatically
+  // on death/reset because `this.scheduled` is wiped there.
+  _startLoop(triggerRt) {
+    const interval = Math.max(0.2, (triggerRt.def.props && triggerRt.def.props.loopInterval) || 2);
+    const run = () => {
+      this._fireTrigger(triggerRt);
+      this.scheduled.push({ time: this.simTime + interval, run });
+    };
+    run();
   }
 
   _fireTrigger(triggerRt) {
@@ -354,7 +485,12 @@ export class Engine {
         break;
       }
       case ACTION_TYPES.SET_STATE: {
-        if (target) target.state = action.params.state;
+        if (target) {
+          const params = action.params || {};
+          if ('passable' in params) target.passable = !!params.passable;
+          if ('invisible' in params) target.invisible = !!params.invisible;
+          if ('harmless' in params) target.harmless = !!params.harmless;
+        }
         break;
       }
       case ACTION_TYPES.SET_GRAVITY: {
@@ -425,12 +561,14 @@ export class Engine {
   }
 
   _renderEntity(rt) {
-    if (rt.state === ENTITY_STATES.INVISIBLE && !this.debugTriggers) return;
+    if (rt.invisible && !this.debugTriggers) return;
     const ctx = this.ctx;
     const w = rt.def.w * CELL, h = rt.def.h * CELL;
-    const alpha = rt.state === ENTITY_STATES.PASSABLE ? 0.35 : 1;
+    // Deliberate: none of the passable/invisible/harmless toggles change an
+    // entity's look (no dimming, no recoloring) — "invisible" not being
+    // rendered at all is the one exception, and that's the point of the
+    // toggle, not a stylistic effect. This keeps traps from being telegraphed.
     ctx.save();
-    ctx.globalAlpha = alpha;
     switch (rt.def.type) {
       case ENTITY_TYPES.BLOCK:
         ctx.fillStyle = '#111319';
@@ -446,18 +584,8 @@ export class Engine {
         ctx.fillRect(rt.x, rt.y, w, 4);
         break;
       case ENTITY_TYPES.SPIKE: {
-        const harmless = rt.state === ENTITY_STATES.HARMLESS;
-        ctx.fillStyle = harmless ? '#5b6b7a' : '#e63946';
-        const n = rt.def.w;
-        for (let i = 0; i < n; i++) {
-          const bx = rt.x + i * CELL;
-          ctx.beginPath();
-          ctx.moveTo(bx, rt.y + h);
-          ctx.lineTo(bx + CELL / 2, rt.y);
-          ctx.lineTo(bx + CELL, rt.y + h);
-          ctx.closePath();
-          ctx.fill();
-        }
+        ctx.fillStyle = '#e63946';
+        drawSpikeRow(ctx, rt.x, rt.y, w, h, rt.def.w, (rt.def.props && rt.def.props.facing) || 'up');
         break;
       }
       case ENTITY_TYPES.SPRING: {
@@ -472,12 +600,35 @@ export class Engine {
         ctx.fillText(arrow, rt.x + w / 2, rt.y + h * 0.35);
         break;
       }
+      case ENTITY_TYPES.FAN: {
+        const dir = (rt.def.props && rt.def.props.direction) || 'right';
+        ctx.fillStyle = '#0d3b4a';
+        ctx.fillRect(rt.x, rt.y, w, h);
+        ctx.strokeStyle = '#48cae4'; ctx.lineWidth = 2;
+        ctx.strokeRect(rt.x + 2, rt.y + 2, w - 4, h - 4);
+        // little swirl blades
+        const cx = rt.x + w / 2, cy = rt.y + h / 2;
+        const spin = (this.simTime || 0) * 8;
+        ctx.strokeStyle = '#90e0ef';
+        for (let i = 0; i < 3; i++) {
+          const a = spin + (i / 3) * Math.PI * 2;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(cx + Math.cos(a) * w * 0.32, cy + Math.sin(a) * h * 0.32);
+          ctx.lineWidth = 4;
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#90e0ef';
+        ctx.font = '14px sans-serif'; ctx.textAlign = 'center';
+        const arrow = { up: '↑', down: '↓', left: '←', right: '→' }[dir];
+        ctx.fillText(arrow, cx, rt.y + h - 6);
+        break;
+      }
       case ENTITY_TYPES.SPINNER: {
         const cx = rt.x + w / 2, cy = rt.y + h / 2;
         const r = CELL * ((rt.def.props && rt.def.props.radius) || 0.9) * (rt.def.w);
-        const harmless = rt.state === ENTITY_STATES.HARMLESS;
-        ctx.fillStyle = harmless ? '#5b6b7a' : '#c9184a';
-        ctx.strokeStyle = harmless ? '#5b6b7a' : '#c9184a';
+        ctx.fillStyle = '#c9184a';
+        ctx.strokeStyle = '#c9184a';
         const spikes = 8;
         for (let i = 0; i < spikes; i++) {
           const a = rt.angle + (i / spikes) * Math.PI * 2;
@@ -489,6 +640,28 @@ export class Engine {
         }
         ctx.beginPath(); ctx.arc(cx, cy, r * 0.35, 0, Math.PI * 2);
         ctx.fillStyle = '#2b2d42'; ctx.fill();
+        break;
+      }
+      case ENTITY_TYPES.TELEPORTER: {
+        const cx = rt.x + w / 2, cy = rt.y + h / 2;
+        const freq = (rt.def.props && rt.def.props.frequency) || 1;
+        const spin = (this.simTime || 0) * 3;
+        const colors = ['#9d4edd', '#f72585', '#4cc9f0', '#f9c74f', '#43aa8b', '#f3722c', '#577590', '#90be6d'];
+        const color = colors[(freq - 1) % colors.length];
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.fillRect(rt.x, rt.y, w, h);
+        ctx.strokeStyle = color; ctx.lineWidth = 3;
+        for (let ring = 0; ring < 2; ring++) {
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, (w / 2 - 4) * (1 - ring * 0.3), (h / 2 - 4) * (1 - ring * 0.3), spin + ring, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.fillStyle = '#fff'; ctx.font = 'bold 13px sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(String(freq), cx, cy + 4);
+        if (rt.def.props && rt.def.props.oneUse) {
+          ctx.font = '9px sans-serif'; ctx.fillStyle = color;
+          ctx.fillText(rt.usedOnce ? 'utilisé' : '1×', cx, rt.y + h - 4);
+        }
         break;
       }
       case ENTITY_TYPES.GOAL:
@@ -507,6 +680,8 @@ export class Engine {
         ctx.closePath(); ctx.fill();
         break;
       case ENTITY_TYPES.TRIGGER:
+        // Triggers are always invisible in real play — only the editor's
+        // debug/playtest view reveals their zone, never actual gameplay.
         if (this.debugTriggers) {
           ctx.fillStyle = 'rgba(255,255,0,0.15)';
           ctx.strokeStyle = 'rgba(255,255,0,0.6)';
@@ -514,6 +689,20 @@ export class Engine {
           ctx.strokeRect(rt.x, rt.y, w, h);
         }
         break;
+      case ENTITY_TYPES.BUTTON: {
+        // A button is deliberately visible (unlike a trigger) so the player
+        // can tell it's there and understand it can be pressed again once
+        // its cooldown has elapsed.
+        const cooling = this.simTime < rt.buttonReadyAt;
+        ctx.fillStyle = '#2b2d3d';
+        ctx.fillRect(rt.x, rt.y, w, h);
+        ctx.strokeStyle = '#5b5f7a'; ctx.lineWidth = 2;
+        ctx.strokeRect(rt.x + 2, rt.y + 2, w - 4, h - 4);
+        const padH = cooling ? h * 0.22 : h * 0.32;
+        ctx.fillStyle = cooling ? '#e07a2c' : '#06d6a0';
+        ctx.fillRect(rt.x + w * 0.18, rt.y + h - padH - h * 0.12, w * 0.64, padH);
+        break;
+      }
       case ENTITY_TYPES.DECOR:
         ctx.fillStyle = '#4a4e69';
         ctx.fillRect(rt.x, rt.y, w, h);
@@ -524,13 +713,95 @@ export class Engine {
 
   _renderPlayer() {
     const ctx = this.ctx, p = this.player;
+    const troll = p.invert.horizontal || p.invert.vertical;
     ctx.save();
-    ctx.fillStyle = this.player.invert.horizontal || this.player.invert.vertical ? '#b5179e' : '#f77f00';
-    ctx.fillRect(p.x, p.y, p.w, p.h);
+    // soft drop shadow for a bit of depth
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    roundRect(ctx, p.x + 2, p.y + p.h - 5, p.w - 4, 6, 3);
+    ctx.fill();
+
+    const bodyColor = troll ? '#b5179e' : '#f77f00';
+    const bodyColor2 = troll ? '#7209b7' : '#d1600a';
+    const grad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.h);
+    grad.addColorStop(0, bodyColor);
+    grad.addColorStop(1, bodyColor2);
+    ctx.fillStyle = grad;
+    roundRect(ctx, p.x, p.y, p.w, p.h, p.w * 0.28);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, p.x + 1, p.y + 1, p.w - 2, p.h - 2, p.w * 0.24);
+    ctx.stroke();
+
+    // face: two eyes looking in the facing direction, small mouth
+    const eyeSize = Math.max(3, p.w * 0.16);
+    const eyeY = p.y + p.h * 0.35;
+    const spread = p.w * 0.22;
+    const cx = p.x + p.w / 2;
+    const lookOffset = p.facing * p.w * 0.06;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(cx - spread, eyeY, eyeSize, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + spread, eyeY, eyeSize, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#1b1e2b';
-    const eyeSize = 4;
-    const ex = p.facing > 0 ? p.x + p.w - 10 : p.x + 6;
-    ctx.fillRect(ex, p.y + 8, eyeSize, eyeSize);
+    const pupilR = eyeSize * 0.55;
+    ctx.beginPath(); ctx.arc(cx - spread + lookOffset, eyeY, pupilR, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx + spread + lookOffset, eyeY, pupilR, 0, Math.PI * 2); ctx.fill();
+
+    ctx.strokeStyle = '#1b1e2b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    if (troll) {
+      // worried wavy mouth when controls are inverted
+      ctx.moveTo(cx - p.w * 0.18, p.y + p.h * 0.68);
+      ctx.quadraticCurveTo(cx, p.y + p.h * 0.6, cx + p.w * 0.18, p.y + p.h * 0.68);
+    } else {
+      ctx.moveTo(cx - p.w * 0.16, p.y + p.h * 0.62);
+      ctx.quadraticCurveTo(cx, p.y + p.h * 0.74, cx + p.w * 0.16, p.y + p.h * 0.62);
+    }
+    ctx.stroke();
     ctx.restore();
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+// Draws a row (or column, for left/right-facing) of triangular spikes so the
+// hazard visually points the way its `facing` prop says, even though the
+// hitbox stays a simple axis-aligned box.
+function drawSpikeRow(ctx, x, y, w, h, cellsWide, facing) {
+  if (facing === 'up' || facing === 'down') {
+    for (let i = 0; i < cellsWide; i++) {
+      const bx = x + i * CELL;
+      ctx.beginPath();
+      if (facing === 'up') {
+        ctx.moveTo(bx, y + h); ctx.lineTo(bx + CELL / 2, y); ctx.lineTo(bx + CELL, y + h);
+      } else {
+        ctx.moveTo(bx, y); ctx.lineTo(bx + CELL / 2, y + h); ctx.lineTo(bx + CELL, y);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
+  } else {
+    const rowsTall = Math.max(1, Math.round(h / CELL));
+    for (let i = 0; i < rowsTall; i++) {
+      const by = y + i * CELL;
+      ctx.beginPath();
+      if (facing === 'left') {
+        ctx.moveTo(x + w, by); ctx.lineTo(x, by + CELL / 2); ctx.lineTo(x + w, by + CELL);
+      } else {
+        ctx.moveTo(x, by); ctx.lineTo(x + w, by + CELL / 2); ctx.lineTo(x, by + CELL);
+      }
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 }

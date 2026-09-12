@@ -18,14 +18,20 @@
       <a class="btn small" href="index.html">&larr; Accueil</a>
       <button class="btn small" id="restart-btn">Recommencer</button>
     </nav>
+    <div id="account-bar"></div>
   </div>
 
   <div class="hud container" style="padding-top:12px;padding-bottom:0;">
     <div>
       <strong id="level-title">Niveau</strong>
       <span class="muted" id="level-author"></span>
+      <span class="pill hidden" id="official-badge" title="Ce niveau à été approuvé par un admin.">🏅 officiel</span>
     </div>
-    <div class="stat">Morts : <b id="deaths">0</b></div>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn small hidden" id="like-btn">❤ Liker (<span id="like-count">0</span>)</button>
+      <button class="btn small hidden" id="report-btn">🚩 Signaler</button>
+      <div class="stat">Morts : <b id="deaths">0</b></div>
+    </div>
   </div>
 
   <div id="load-error" class="card hidden" style="margin:12px auto;max-width:640px;color:#ffb4b4;background:#3a1a1f;"></div>

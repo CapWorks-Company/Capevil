@@ -1,30 +1,41 @@
 # Level Devil — jeu + éditeur + niveaux communautaires
 
-Un jeu de plateforme façon **Level Devil** : blocs, pointes, ressorts, roues
-tournantes, plateformes mobiles, et des **triggers** qui déclenchent des
-pièges (déplacements en série, changement d'état d'un élément, inversion de
-la gravité, inversion des touches façon troll, changement de puissance de
-saut...). Inclut un éditeur de niveaux complet et un système de publication
-en base de données (Supabase) pour que les niveaux créés soient jouables par
-tout le monde. Aucune étape de build : ce sont des fichiers HTML/CSS/JS
+Un jeu de plateforme façon **Level Devil** : blocs, pointes orientables,
+ressorts (haut/bas), ventilateurs (vent continu gauche/droite/haut/bas),
+roues tournantes, téléporteurs liés par fréquence, plateformes mobiles, des
+**triggers** invisibles et des **boutons** visibles/répétables qui
+déclenchent des pièges (déplacements en série, boucles autonomes,
+changement d'état d'un élément — traversable / invisible / inoffensif —,
+inversion de la gravité, inversion des touches façon troll, changement de
+puissance de saut...). Une mort remet tout le niveau à zéro (triggers,
+positions, états) sauf le dernier checkpoint atteint.
+
+Inclut un éditeur de niveaux complet, des **comptes joueurs** (Supabase
+Auth) pour publier sous son vrai nom et gérer (modifier/supprimer) ses
+propres niveaux, un système de **likes**, une file de **demandes
+d'approbation** avec un espace **admin** pour promouvoir des niveaux en
+« Parties officielles », et un **signalement** réservé à ces niveaux
+officiels. Aucune étape de build : ce sont des fichiers HTML/CSS/JS
 statiques. Ce dépôt est prêt à être hébergé à la fois sur **GitHub Pages**
 et sur un **Cloudflare Worker** (Static Assets) — les deux servent
 exactement les mêmes fichiers, **Supabase est le seul vrai "backend"**
-(base de données + API).
+(base de données + authentification + API).
 
 ## Structure du projet
 
 ```
-index.html      → accueil : liste des niveaux publiés + brouillons locaux
+index.html      → accueil : parties officielles + niveaux publiés + brouillons + mes niveaux
 game.html        → écran de jeu (?id=<uuid> pour un niveau publié,
                     ?local=<clé> pour un brouillon local, sinon niveau démo)
-editor.html      → éditeur de niveaux
-js/engine.js      → moteur de jeu (physique, collisions, triggers, rendu)
+editor.html      → éditeur de niveaux (?edit=<uuid> pour modifier un niveau publié)
+admin.html       → espace admin : approbation des niveaux + signalements
+js/engine.js      → moteur de jeu (physique, collisions, triggers/boutons, rendu)
 js/editor.js      → logique de l'éditeur
 js/level-model.js → format de données d'un niveau (JSON)
 js/sample-level.js → niveau de démonstration
+js/auth-ui.js     → petit widget de connexion/inscription réutilisé partout
 js/config.js      → clés Supabase (voir ci-dessous)
-js/supabase-client.js → publication / liste / chargement des niveaux
+js/supabase-client.js → comptes, publication / liste / likes / approbation / signalement
 sql/schema.sql    → schéma de base de données à exécuter dans Supabase
 wrangler.toml     → config pour déployer sur un Cloudflare Worker
 ```
@@ -41,14 +52,35 @@ wrangler.toml     → config pour déployer sur un Cloudflare Worker
 4. Ouvre `js/config.js` et remplace les deux valeurs par les tiennes.
 
 La clé "anon" est faite pour être publique : la sécurité vient des règles
-RLS définies dans `schema.sql` (lecture publique, écriture limitée, pas de
-suppression/modification à distance), pas du secret de cette clé.
+RLS définies dans `schema.sql` (lecture publique, écriture limitée aux
+propriétaires, jamais de suppression/modification par un autre compte), pas
+du secret de cette clé.
 
-**Limite connue (v1)** : il n'y a pas de compte utilisateur. N'importe qui
-peut publier un niveau, mais personne ne peut modifier ou supprimer le
-niveau de quelqu'un d'autre après publication (immuable une fois publié).
-Une v2 avec un vrai système de comptes (Supabase Auth) permettrait de gérer
-"mes niveaux publiés", de les éditer et de les supprimer.
+### Comptes joueurs
+
+Publier un niveau nécessite un compte (créé directement dans le site, pas
+besoin d'aller sur Supabase) : le nom d'auteur affiché est toujours celui du
+compte connecté, jamais un texte libre. Un compte peut modifier ou
+supprimer ses propres niveaux depuis la page d'accueil ("Mes niveaux
+publiés") ou avec `editor.html?edit=<id>`.
+
+### Devenir admin
+
+Ce projet n'a pas d'inscription "admin" séparée : n'importe qui peut créer
+un compte joueur normal. Le statut admin (qui permet d'approuver des
+niveaux en "Parties officielles" et de traiter les signalements) se donne
+à la main, une seule fois, dans **Supabase Dashboard → SQL Editor** :
+
+```sql
+update public.profiles set is_admin = true
+where id = (select id from auth.users where email = 'ton-email@exemple.com');
+```
+
+Connecte-toi ensuite avec ce compte sur `admin.html`.
+
+**Limite connue** : il n'y a que deux niveaux de droits (joueur / admin), pas
+de modération plus fine (plusieurs admins avec des permissions différentes,
+bannissement de comptes, etc.).
 
 ## 2. Tester en local
 
@@ -103,8 +135,8 @@ modifies un fichier directement dans l'éditeur web de GitHub.
 login && wrangler deploy`, si tu préfères.)*
 
 ## Prochaines améliorations possibles
-- Comptes joueurs (Supabase Auth) pour gérer/éditer/supprimer ses niveaux.
-- Système de likes / commentaires sur les niveaux publiés.
+- Rôles admin plus fins (plusieurs admins, permissions différentes) et modération de comptes.
+- Commentaires sur les niveaux publiés.
 - Musique synchronisée et effets sonores.
 - Meilleure hitbox circulaire pour la roue tournante.
 - Undo/redo et copier-coller dans l'éditeur.
