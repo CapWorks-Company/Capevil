@@ -182,25 +182,74 @@ canvas#stage {
 .props-panel label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
 .props-panel .row { display: flex; gap: 6px; }
 .props-panel .row > * { flex: 1; }
-.props-sep { border: none; border-top: 1px solid var(--border); margin: 16px 0; }
+.props-panel > label:first-of-type { margin-top: 0; }
+
+/* A short, muted explanatory line under a field or a whole section — used
+   everywhere in place of ad hoc <p class="muted" style="..."> so every hint
+   in the props panel reads consistently. */
+.hint { font-size: 11.5px; line-height: 1.5; color: var(--muted); margin: 6px 2px 0; }
+
+/* One self-contained cluster of related fields (an entity's type-specific
+   settings, a trigger/button/plate's config, one action's params) rendered
+   as a distinct card instead of a flat run of labels — this is what makes
+   the props panel read as organized sections rather than one long list. */
+.field-group {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 11px;
+  padding: 12px 12px 14px; margin: 14px 0;
+}
+.field-group label { margin-top: 10px; }
+.field-group > label:first-of-type,
+.field-group > .section-title + label { margin-top: 0; }
+.section-title {
+  font-family: var(--font-display); font-size: 12px; font-weight: 700;
+  color: var(--text); text-transform: uppercase; letter-spacing: .5px;
+  margin: 0 0 10px; padding-bottom: 9px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.section-title .pill { margin-left: auto; }
 
 .toggle-list { display: flex; flex-direction: column; gap: 6px; }
 .toggle-row {
   display: flex !important; align-items: center; gap: 8px;
-  background: var(--panel-2); border: 1px solid var(--border); border-radius: 7px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 7px;
   padding: 7px 10px; font-size: 12.5px; color: var(--text) !important;
   text-transform: none !important; font-weight: 400 !important;
   cursor: pointer; margin: 0 !important;
+  transition: background .12s ease, border-color .12s ease;
 }
 .toggle-row:hover { background: var(--panel-3); }
 .toggle-row input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 
+/* An optional field block (SET_WORLD_STATE / SET_PLAYER_STATE / SET_STATE's
+   facing): a small enable checkbox that reveals the value input(s) below it.
+   The card dims and its border goes neutral while off, and lights up with an
+   accent edge once switched on, so it's obvious at a glance which fields an
+   action actually touches. */
+.ws-block {
+  border: 1px solid var(--border); border-radius: 9px; padding: 9px 10px;
+  margin-bottom: 8px; background: var(--panel);
+  transition: border-color .15s ease, background .15s ease, opacity .15s ease;
+}
+.ws-block:last-child { margin-bottom: 0; }
+.ws-block.is-on { border-color: rgba(247,127,0,0.4); background: linear-gradient(180deg, rgba(247,127,0,0.07) 0%, var(--panel) 65%); }
+.ws-block.is-off { opacity: .62; }
+.ws-block .toggle-row { background: transparent; border: none; padding: 0; }
+.ws-block .toggle-row:hover { background: transparent; }
+
 .action-item {
-  border: 1px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 10px; background: var(--panel-2);
+  border: 1px solid var(--border); border-radius: 10px; padding: 11px; margin-bottom: 10px; background: var(--panel-2);
   box-shadow: 0 2px 6px rgba(0,0,0,0.2);
 }
 .action-item .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; }
 .action-item .head select { flex: 1; }
+.action-item label:first-of-type { margin-top: 4px; }
+
+.props-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 4px;
+}
+.props-header h3 { margin: 0; }
+.pill.type-badge { font-family: var(--font-display); font-size: 12.5px; font-weight: 700; letter-spacing: .2px; padding: 4px 11px; color: var(--text); }
 
 #toolbox, #props {
   background: var(--panel); border: 1px solid var(--border); border-radius: 14px;

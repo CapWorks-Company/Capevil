@@ -81,7 +81,7 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
       break;
     case ENTITY_TYPES.BUTTON:
       base.w = 1; base.h = 1;
-      base.props = { actions: [], loop: false, resetAfterActions: 'none' };
+      base.props = { actions: [], loop: false };
       break;
     case ENTITY_TYPES.PLATE:
       base.w = 1; base.h = 1;
@@ -218,8 +218,10 @@ export function normalizeLevel(rawLevel) {
     }
     if (e.type === ENTITY_TYPES.BUTTON) {
       e.props.loop = !!e.props.loop;
-      e.props.resetAfterActions = e.props.resetAfterActions || 'none';
-      delete e.props.mode; delete e.props.loopInterval; delete e.props.cooldown; // old fixed cooldown, gone
+      // "resetAfterActions" is gone — every button/plate press now
+      // automatically alternates forward/reverse of its own accord (see
+      // engine.js's _fireTrigger), so there's nothing left to configure.
+      delete e.props.mode; delete e.props.loopInterval; delete e.props.cooldown; delete e.props.resetAfterActions;
     }
     if (e.type === ENTITY_TYPES.PLATFORM) {
       e.props.color = e.props.color || null; // null = default look, same as a solid block

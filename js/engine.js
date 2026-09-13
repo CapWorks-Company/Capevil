@@ -64,7 +64,14 @@ export class Engine {
     this.simTime = 0;
     this.won = false;
     this.dead = false;
+    this.finishing = false; // true while the goal door is playing its closing animation
+    this._hidePlayerForDoor = false;
     this.respawn = { x: lvl.playerStart.x, y: lvl.playerStart.y };
+    // The world's AUTHORED gravity/background — SET_WORLD_STATE can change
+    // these live, and a button/plate's "reverse" pass needs to know what to
+    // restore them to (see _runAction/SET_WORLD_STATE and _reverseAction).
+    this._authoredGravityScale = Number.isFinite(lvl.gravityScale) ? lvl.gravityScale : 1;
+    this._authoredBackground = lvl.background || '#1b1e2b';
     this._buildRuntime();
     this._resetPlayer();
     this.scheduled = []; // [{time, run}]
@@ -82,6 +89,7 @@ export class Engine {
         def: ent,
         x: ent.x * CELL, y: ent.y * CELL,
         passable: !!ent.passable, invisible: !!ent.invisible, harmless: !!ent.harmless,
+        facing: (ent.props && ent.props.facing) || 'up', // runtime-only so SET_STATE can rotate it without touching the authored def
         anim: null, // { fromX,fromY,toX,toY,startTime,duration }
         dx: 0, dy: 0, // this-frame movement delta, for carrying the player along
         angle: 0,
@@ -93,6 +101,11 @@ export class Engine {
         holding: false,     // (plate only) the player is currently on it, auto-repeating
         buttonReady: true,  // (button only) can be pressed again
         awaitingReset: false, // (button, resetAfterActions:'onNextPress') next press reverts instead of firing
+        reversed: false,    // (button/plate only) next activation replays its actions undone instead of forward
+        // goal-door animation state
+        closing: false,
+        closeStart: 0,
+        doorProgress: 0,
       });
     }
   }
@@ -123,13 +136,18 @@ export class Engine {
   _resetRuntimeState() {
     this.scheduled = [];
     this._teleportCooldown = 0;
+    this.finishing = false;
+    this.level.gravityScale = this._authoredGravityScale;
+    this.level.background = this._authoredBackground;
     for (const rt of this.runtime.values()) {
       const def = rt.def;
       rt.x = def.x * CELL; rt.y = def.y * CELL;
       rt.passable = !!def.passable; rt.invisible = !!def.invisible; rt.harmless = !!def.harmless;
+      rt.facing = (def.props && def.props.facing) || 'up';
       rt.anim = null; rt.dx = 0; rt.dy = 0; rt.angle = 0;
       rt.wasOverlapping = false; rt.usedOnce = false;
-      rt.looping = false; rt.holding = false; rt.buttonReady = true; rt.awaitingReset = false;
+      rt.looping = false; rt.holding = false; rt.buttonReady = true; rt.awaitingReset = false; rt.reversed = false;
+      rt.closing = false; rt.closeStart = 0; rt.doorProgress = 0;
       if (def.type !== ENTITY_TYPES.CHECKPOINT) rt.activated = false;
     }
   }
@@ -195,20 +213,53 @@ export class Engine {
     this.onWin({ deaths: this.deaths });
   }
 
+  // Touching the goal doesn't win instantly: the player is pulled inside the
+  // doorway (and hidden — "téléporté dedans"), the door slides shut over
+  // DOOR_CLOSE_DURATION, and only once it's fully closed does the level
+  // actually count as won. Gameplay (input/physics/triggers) is frozen for
+  // the whole animation via the `finishing` flag checked in update().
+  _startDoorClose(rt, box) {
+    this.finishing = true;
+    rt.closing = true;
+    rt.closeStart = this.simTime;
+    const p = this.player;
+    p.vx = 0; p.vy = 0;
+    p.x = rt.x + box.w / 2 - p.w / 2;
+    p.y = rt.y + box.h / 2 - p.h / 2;
+    this._hidePlayerForDoor = true;
+    sfx.teleport();
+  }
+
+  _updateDoors() {
+    if (!this.finishing) return;
+    const DOOR_CLOSE_DURATION = 0.6;
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.GOAL || !rt.closing) continue;
+      const t = Math.min(1, (this.simTime - rt.closeStart) / DOOR_CLOSE_DURATION);
+      rt.doorProgress = t;
+      if (t >= 1) this.winLevel();
+    }
+  }
+
   // ---------------------------------------------------------------- update
   update(dt) {
     this.simTime += dt;
     if (this._teleportCooldown > 0) this._teleportCooldown -= dt;
     this._runScheduled();
     this._updateMovers(dt);
-    this._applyFans(dt);
-    this._updatePhysics(dt);
+    // Once the player has touched the goal door, gameplay itself pauses —
+    // no more input/physics/triggers — while the door finishes closing.
+    if (!this.finishing) {
+      this._applyFans(dt);
+      this._updatePhysics(dt);
+      this._checkTriggers();
+      this._checkButtons();
+      this._checkPlates();
+      this._checkHazardsAndGoal();
+      this._checkTeleporters();
+    }
     this._updateSpinnerAngles(dt);
-    this._checkTriggers();
-    this._checkButtons();
-    this._checkPlates();
-    this._checkHazardsAndGoal();
-    this._checkTeleporters();
+    this._updateDoors();
     this._updateCamera();
   }
 
@@ -266,6 +317,22 @@ export class Engine {
       else if (v.x < 0) { box.x -= range * CELL; box.w += range * CELL; }
       else if (v.y > 0) box.h += range * CELL;
       else if (v.y < 0) { box.y -= range * CELL; box.h += range * CELL; }
+
+      // Ambient wind: as long as the fan itself is visible, sprinkle a few
+      // particles drifting along its whole push corridor every frame —
+      // whether or not the player happens to be standing in it right now —
+      // so a fan visibly "blows" across the cells/blocks it affects instead
+      // of only showing an effect when something is being pushed. The rate
+      // scales with `force` (power) so a stronger fan reads as busier.
+      if (!rt.invisible) {
+        const ambientForce = props.force ?? 1;
+        if (Math.random() < dt * (2 + ambientForce * 3)) {
+          const px = box.x + Math.random() * box.w;
+          const py = box.y + Math.random() * box.h;
+          this.particles.wind(px, py, v, Math.min(2, ambientForce));
+        }
+      }
+
       if (!this._overlap(p, box)) continue;
 
       let distCells = 0;
@@ -456,8 +523,8 @@ export class Engine {
         sfx.spring();
         this.particles.dust(rt.x + box.w / 2, rt.y);
       }
-      if (t === ENTITY_TYPES.GOAL) {
-        this.winLevel();
+      if (t === ENTITY_TYPES.GOAL && !this.finishing) {
+        this._startDoorClose(rt, box);
       }
       if (t === ENTITY_TYPES.CHECKPOINT && !rt.activated) {
         rt.activated = true;
@@ -524,10 +591,12 @@ export class Engine {
 
   // A button is a visible, physical switch: pressing it fires its actions;
   // it becomes pressable again as soon as those actions finish playing (no
-  // fixed cooldown to configure). "Retour au point de départ" optionally
-  // returns whatever it moved back to where it started, either immediately
-  // once the actions finish or on the button's next press. "Boucle infinie"
-  // instead turns one press into a self-repeating cycle forever.
+  // fixed cooldown to configure). Every press alternates between playing its
+  // actions forward and playing them undone — "comme si on inversait le sens
+  // du temps" — via _fireTrigger's built-in forward/reverse toggle (see
+  // below), so a second press naturally puts everything back the way it
+  // was. "Boucle infinie" instead turns one press into a self-repeating
+  // cycle forever (each cycle of the loop also alternates the same way).
   _checkButtons() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
@@ -536,26 +605,14 @@ export class Engine {
       const overlapping = this._overlap(p, box);
       const props = rt.def.props || {};
       if (overlapping && !rt.wasOverlapping && rt.buttonReady) {
-        const resetMode = props.resetAfterActions || 'none';
-        if (resetMode === 'onNextPress' && rt.awaitingReset) {
-          this._revertButtonTargets(rt);
-          rt.awaitingReset = false;
-          sfx.button();
-        } else if (props.loop) {
+        sfx.button();
+        if (props.loop) {
           this._fireLoop(rt);
-          sfx.button();
         } else {
           this._fireTrigger(rt);
-          sfx.button();
           rt.buttonReady = false;
           const finishAt = this._actionsFinishTime(rt);
-          if (resetMode === 'afterActions') {
-            this.scheduled.push({ time: finishAt, run: () => { this._revertButtonTargets(rt); rt.buttonReady = true; } });
-          } else if (resetMode === 'onNextPress') {
-            this.scheduled.push({ time: finishAt, run: () => { rt.awaitingReset = true; rt.buttonReady = true; } });
-          } else {
-            this.scheduled.push({ time: finishAt, run: () => { rt.buttonReady = true; } });
-          }
+          this.scheduled.push({ time: finishAt, run: () => { rt.buttonReady = true; } });
         }
       }
       rt.wasOverlapping = overlapping;
@@ -564,8 +621,9 @@ export class Engine {
 
   // A pressure plate repeats its actions for as long as the player stays on
   // it (one cycle right away, then again every time the previous cycle
-  // finishes), stopping the moment they step off — unless "boucle infinie"
-  // is set, in which case one press starts a cycle that never stops.
+  // finishes — alternating forward/reverse each cycle, same as a button),
+  // stopping the moment they step off — unless "boucle infinie" is set, in
+  // which case one press starts a cycle that never stops.
   _checkPlates() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
@@ -626,31 +684,20 @@ export class Engine {
     return this.simTime + this._actionsSpan(rt);
   }
 
-  // Animates every element this button's moveElement actions targeted back
-  // to its authored starting position ("retour au point de départ").
-  _revertButtonTargets(rt) {
-    const actions = (rt.def.props && rt.def.props.actions) || [];
-    const seen = new Set();
-    for (const a of actions) {
-      if (a.type !== ACTION_TYPES.MOVE_ELEMENT || !a.targetId || seen.has(a.targetId)) continue;
-      seen.add(a.targetId);
-      const target = this.runtime.get(a.targetId);
-      if (!target) continue;
-      target.anim = {
-        fromX: target.x, fromY: target.y,
-        toX: target.def.x * CELL, toY: target.def.y * CELL,
-        startTime: this.simTime,
-        duration: 0.4,
-      };
-    }
-  }
-
+  // TRIGGER always plays its actions forward. BUTTON and PLATE instead
+  // alternate every time they fire: 1st activation forward, 2nd activation
+  // undone ("comme si on inversait le sens du temps" — a moved element goes
+  // back to its start, an invisible player becomes visible again, etc — see
+  // _runActionReversed), 3rd forward again, and so on.
   _fireTrigger(triggerRt) {
+    const isReversible = triggerRt.def.type === ENTITY_TYPES.BUTTON || triggerRt.def.type === ENTITY_TYPES.PLATE;
+    const reversed = isReversible && triggerRt.reversed;
     const actions = (triggerRt.def.props && triggerRt.def.props.actions) || [];
     for (const action of actions) {
       const runAt = this.simTime + (action.delay || 0);
-      this.scheduled.push({ time: runAt, run: () => this._runAction(action) });
+      this.scheduled.push({ time: runAt, run: () => (reversed ? this._runActionReversed(action) : this._runAction(action)) });
     }
+    if (isReversible) triggerRt.reversed = !triggerRt.reversed;
   }
 
   _runAction(action) {
@@ -686,6 +733,7 @@ export class Engine {
           if ('passable' in params) target.passable = !!params.passable;
           if ('invisible' in params) target.invisible = !!params.invisible;
           if ('harmless' in params) target.harmless = !!params.harmless;
+          if ('facing' in params) target.facing = params.facing;
         }
         break;
       }
@@ -708,7 +756,7 @@ export class Engine {
             }, dur * 1000);
           }
         }
-        if ('invisible' in params) p.invisible = !!params.invisible;
+        if ('invisible' in params) this._setPlayerInvisible(!!params.invisible);
         if ('jumpMult' in params) {
           p.jumpMult = params.jumpMult;
           const dur = params.statDuration || 0;
@@ -725,12 +773,89 @@ export class Engine {
     }
   }
 
+  // The "undo" half of a button/plate's forward/reverse alternation (see
+  // _fireTrigger): instead of applying the action, put back whatever it
+  // would have changed. A moved element returns to its authored position;
+  // world/player state goes back to what the level/player started with;
+  // boolean flags return to their authored defaults. Never used for
+  // TRIGGER, which always plays forward.
+  _runActionReversed(action) {
+    const p = this.player;
+    const target = action.targetId === 'player' ? null : this.runtime.get(action.targetId);
+    const params = action.params || {};
+    switch (action.type) {
+      case ACTION_TYPES.MOVE_ELEMENT: {
+        if (!target) return;
+        target.anim = {
+          fromX: target.x, fromY: target.y,
+          toX: target.def.x * CELL, toY: target.def.y * CELL,
+          startTime: this.simTime,
+          duration: Math.max(0.05, params.duration || 0.5),
+        };
+        break;
+      }
+      case ACTION_TYPES.TELEPORT: {
+        if (action.targetId === 'player') {
+          p.x = this.respawn.x * CELL; p.y = this.respawn.y * CELL;
+        } else if (target) {
+          target.x = target.def.x * CELL; target.y = target.def.y * CELL;
+          target.anim = null;
+        }
+        break;
+      }
+      case ACTION_TYPES.SET_STATE: {
+        if (target) {
+          if ('passable' in params) target.passable = !!target.def.passable;
+          if ('invisible' in params) target.invisible = !!target.def.invisible;
+          if ('harmless' in params) target.harmless = !!target.def.harmless;
+          if ('facing' in params && target.def.props) target.facing = target.def.props.facing || 'up';
+        }
+        break;
+      }
+      case ACTION_TYPES.SET_WORLD_STATE: {
+        if ('gravityScale' in params) this.level.gravityScale = this._authoredGravityScale;
+        if ('background' in params) this.level.background = this._authoredBackground;
+        break;
+      }
+      case ACTION_TYPES.SET_PLAYER_STATE: {
+        const ps = this.level.playerStart || {};
+        if ('gravity' in params) p.gravityDir = ps.gravityDir || 'down';
+        if ('invert' in params) {
+          const axis = params.invert;
+          if (axis === 'both') { p.invert.horizontal = false; p.invert.vertical = false; }
+          else p.invert[axis] = false;
+        }
+        if ('invisible' in params) this._setPlayerInvisible(!!ps.invisible);
+        if ('jumpMult' in params) p.jumpMult = 1;
+        if ('speedMult' in params) p.speedMult = 1;
+        break;
+      }
+      default: break;
+    }
+  }
+
+  // Toggling visibility mid-game gets a small "poof" — particles + a sound —
+  // right at the moment it changes, so it reads as a deliberate effect
+  // rather than the player silently popping in/out. No-ops if the value
+  // doesn't actually change (e.g. an action re-setting invisible:true twice).
+  _setPlayerInvisible(value) {
+    const p = this.player;
+    if (p.invisible === value) return;
+    p.invisible = value;
+    const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+    this.particles.poof(cx, cy);
+    if (value) sfx.vanish(); else sfx.appear();
+  }
+
   _updateCamera() {
     const cv = this.canvas;
     const lvl = this.level;
     const levelW = lvl.cols * CELL, levelH = lvl.rows * CELL;
-    let cx = this.player.x - cv.width / 3;
-    let cy = this.player.y - cv.height / 2;
+    // The player always sits dead-center of the viewport (not offset ahead
+    // of them) — the only thing that ever moves the camera off-center is the
+    // clamp against the level's edges below.
+    let cx = this.player.x + this.player.w / 2 - cv.width / 2;
+    let cy = this.player.y + this.player.h / 2 - cv.height / 2;
     cx = Math.max(0, Math.min(cx, Math.max(0, levelW - cv.width)));
     cy = Math.max(0, Math.min(cy, Math.max(0, levelH - cv.height)));
     this.camera.x = cx; this.camera.y = cy;
@@ -800,8 +925,14 @@ export class Engine {
     switch (rt.def.type) {
       case ENTITY_TYPES.BLOCK: {
         // Rendered per-cell (not as one wide rect) so neighboring BLOCK cells
-        // — from this entity or any other — merge into one seamless mass:
-        // only the exposed (non-adjacent) edges of each cell get an outline.
+        // — from this entity or any other, in any direction — merge into one
+        // seamless mass. Deliberately a FLAT fill (no per-cell gradient): a
+        // top-to-bottom fade recomputed on every single cell would itself
+        // create a visible light/dark banding between vertically stacked
+        // cells even with no highlight/shadow line drawn — exactly the seam
+        // this is supposed to avoid. Depth comes only from the highlight/
+        // shadow strips and outline below, which only ever appear on a
+        // cell's genuinely exposed (non-adjacent) edges, in any direction.
         const cells = this._blockCells;
         for (let i = 0; i < rt.def.w; i++) {
           for (let j = 0; j < rt.def.h; j++) {
@@ -811,11 +942,12 @@ export class Engine {
             const hasDown = cells.has(`${cx},${cy + 1}`);
             const hasLeft = cells.has(`${cx - 1},${cy}`);
             const hasRight = cells.has(`${cx + 1},${cy}`);
-            const grad = ctx.createLinearGradient(px, py, px, py + CELL);
-            grad.addColorStop(0, '#2c2f42'); grad.addColorStop(0.5, '#181a26'); grad.addColorStop(1, '#0e0f16');
-            ctx.fillStyle = grad; ctx.fillRect(px, py, CELL, CELL);
+            ctx.fillStyle = '#181a26';
+            ctx.fillRect(px, py, CELL, CELL);
             if (!hasUp) { ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(px, py, CELL, 3); }
             if (!hasDown) { ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(px, py + CELL - 3, CELL, 3); }
+            if (!hasLeft) { ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect(px, py, 3, CELL); }
+            if (!hasRight) { ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(px + CELL - 3, py, 3, CELL); }
             ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
             ctx.beginPath();
             if (!hasUp) { ctx.moveTo(px, py + 0.5); ctx.lineTo(px + CELL, py + 0.5); }
@@ -847,7 +979,7 @@ export class Engine {
         grad.addColorStop(0, '#ff6b73'); grad.addColorStop(1, '#c1121f');
         ctx.fillStyle = grad;
         ctx.strokeStyle = 'rgba(0,0,0,0.4)'; ctx.lineWidth = 1.5;
-        drawSpikeRow(ctx, rt.x, rt.y, w, h, rt.def.w, (rt.def.props && rt.def.props.facing) || 'up', true);
+        drawSpikeRow(ctx, rt.x, rt.y, w, h, rt.def.w, rt.facing || 'up', true);
         break;
       }
       case ENTITY_TYPES.SPRING: {
@@ -949,35 +1081,98 @@ export class Engine {
         break;
       }
       case ENTITY_TYPES.GOAL: {
-        const poleX = rt.x + w * 0.2;
-        const poleGrad = ctx.createLinearGradient(poleX, rt.y, poleX + 4, rt.y);
-        poleGrad.addColorStop(0, '#8a8f9e'); poleGrad.addColorStop(1, '#4a4e5c');
-        ctx.fillStyle = poleGrad; ctx.fillRect(poleX, rt.y, w * 0.08, h);
-        const wave = Math.sin((this.simTime || 0) * 4) * 3;
-        ctx.fillStyle = '#2ec4b6';
-        ctx.beginPath();
-        ctx.moveTo(poleX + w * 0.08, rt.y + h * 0.08);
-        ctx.quadraticCurveTo(rt.x + w * 0.75 + wave, rt.y + h * 0.16, rt.x + w * 0.85, rt.y + h * 0.28);
-        ctx.quadraticCurveTo(rt.x + w * 0.75 + wave, rt.y + h * 0.4, poleX + w * 0.08, rt.y + h * 0.48);
-        ctx.closePath(); ctx.fill();
-        ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth = 1; ctx.stroke();
-        ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(rt.x + w / 2, rt.y + h - 2, w * 0.35, 4, 0, 0, Math.PI * 2); ctx.fill();
+        // A blue doorway: open (a sliver of door pinned to the frame's left
+        // edge, dark inside) until the player walks in, then the panel
+        // slides across to seal it — see _startDoorClose/_updateDoors.
+        const progress = rt.doorProgress || 0; // 0 = open, 1 = fully closed
+        const insetX = Math.max(2, w * 0.08), insetY = Math.max(2, h * 0.04);
+        const frameGrad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
+        frameGrad.addColorStop(0, '#22345c'); frameGrad.addColorStop(1, '#152140');
+        ctx.fillStyle = frameGrad; ctx.fillRect(rt.x, rt.y, w, h);
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1;
+        ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
+        const innerX = rt.x + insetX, innerY = rt.y + insetY;
+        const innerW = w - insetX * 2, innerH = h - insetY;
+        ctx.fillStyle = '#05060a';
+        ctx.fillRect(innerX, innerY, innerW, innerH);
+        const openW = innerW * 0.16;
+        const panelW = openW + (innerW - openW) * progress;
+        const doorGrad = ctx.createLinearGradient(innerX, rt.y, innerX, rt.y + h);
+        doorGrad.addColorStop(0, '#5b93ee'); doorGrad.addColorStop(1, '#2d6cdf');
+        ctx.fillStyle = doorGrad;
+        ctx.fillRect(innerX, innerY, panelW, innerH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
+        ctx.strokeRect(innerX + 0.5, innerY + 0.5, Math.max(0, panelW - 1), innerH - 1);
+        // a small handle/rivet, visible once the door is mostly shut
+        if (progress > 0.4) {
+          ctx.fillStyle = 'rgba(255,255,255,0.55)';
+          ctx.beginPath(); ctx.arc(innerX + panelW - Math.max(4, w * 0.1), innerY + innerH * 0.55, Math.max(1.5, w * 0.035), 0, Math.PI * 2); ctx.fill();
+        }
+        // a soft glow from the still-open gap, fading out as it closes
+        if (progress < 1) {
+          const gap = innerW - panelW;
+          if (gap > 0.5) {
+            ctx.fillStyle = `rgba(120,190,255,${0.25 * (1 - progress)})`;
+            ctx.fillRect(innerX + panelW, innerY, gap, innerH);
+          }
+        }
         break;
       }
       case ENTITY_TYPES.CHECKPOINT: {
+        // A little flagpole planted in the ground: a soft contact shadow, a
+        // gradient pole with a small ball cap, and a cloth flag that ripples
+        // and glows once activated instead of a flat, static triangle.
         const active = rt.activated;
-        const poleX = rt.x + w * 0.35;
-        ctx.fillStyle = active ? '#7cd9ec' : '#4a5a63';
-        ctx.fillRect(poleX, rt.y, w * 0.08, h);
-        const flagColor = active ? '#118ab2' : '#3a6b7a';
-        const wave = active ? Math.sin((this.simTime || 0) * 5) * 2 : 0;
-        ctx.fillStyle = flagColor;
+        const poleX = rt.x + w * 0.34;
+        const poleW = Math.max(2, w * 0.07);
+        const poleTopY = rt.y + h * 0.04;
+        const groundY = rt.y + h;
+
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
         ctx.beginPath();
-        ctx.moveTo(poleX + w * 0.08, rt.y + h * 0.12);
-        ctx.quadraticCurveTo(rt.x + w * 0.8 + wave, rt.y + h * 0.22, rt.x + w * 0.85, rt.y + h * 0.32);
-        ctx.quadraticCurveTo(rt.x + w * 0.8 + wave, rt.y + h * 0.42, poleX + w * 0.08, rt.y + h * 0.5);
-        ctx.closePath(); ctx.fill();
-        if (active) { ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1; ctx.stroke(); }
+        ctx.ellipse(poleX + poleW / 2, groundY - 1, w * 0.22, Math.max(1.5, h * 0.035), 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        const poleGrad = ctx.createLinearGradient(poleX, 0, poleX + poleW, 0);
+        poleGrad.addColorStop(0, active ? '#d8f6fb' : '#6b7980');
+        poleGrad.addColorStop(1, active ? '#5fa9bc' : '#37444b');
+        ctx.fillStyle = poleGrad;
+        ctx.fillRect(poleX, poleTopY, poleW, groundY - poleTopY);
+
+        ctx.fillStyle = active ? '#eafdff' : '#87959c';
+        ctx.beginPath();
+        ctx.arc(poleX + poleW / 2, poleTopY, Math.max(2, w * 0.05), 0, Math.PI * 2);
+        ctx.fill();
+
+        const wave = active ? Math.sin((this.simTime || 0) * 5) * w * 0.045 : 0;
+        const flagTop = poleTopY + h * 0.06;
+        const flagH = h * 0.36;
+        const flagW = w * 0.52;
+        if (active) {
+          ctx.save();
+          ctx.shadowColor = 'rgba(90,220,255,0.55)';
+          ctx.shadowBlur = 8;
+        }
+        const flagGrad = ctx.createLinearGradient(poleX, flagTop, poleX + flagW, flagTop);
+        flagGrad.addColorStop(0, active ? '#5fe0f2' : '#526169');
+        flagGrad.addColorStop(1, active ? '#0f8fae' : '#334147');
+        ctx.fillStyle = flagGrad;
+        ctx.beginPath();
+        ctx.moveTo(poleX + poleW, flagTop);
+        ctx.quadraticCurveTo(poleX + flagW * 0.6 + wave, flagTop + flagH * 0.16, poleX + flagW + wave, flagTop + flagH * 0.4);
+        ctx.quadraticCurveTo(poleX + flagW * 0.6 + wave, flagTop + flagH * 0.64, poleX + poleW, flagTop + flagH);
+        ctx.closePath();
+        ctx.fill();
+        if (active) ctx.restore();
+        ctx.strokeStyle = active ? 'rgba(255,255,255,0.5)' : 'rgba(255,255,255,0.15)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // a single fold line for a bit of cloth-like depth
+        ctx.strokeStyle = active ? 'rgba(255,255,255,0.28)' : 'rgba(255,255,255,0.08)';
+        ctx.beginPath();
+        ctx.moveTo(poleX + poleW, flagTop + flagH * 0.14);
+        ctx.quadraticCurveTo(poleX + flagW * 0.55 + wave, flagTop + flagH * 0.3, poleX + flagW * 0.88 + wave, flagTop + flagH * 0.4);
+        ctx.stroke();
         break;
       }
       case ENTITY_TYPES.TRIGGER:
@@ -1031,34 +1226,44 @@ export class Engine {
   }
 
   _renderPlayer() {
-    if (this.player.invisible && !this.debugTriggers) return;
+    if ((this.player.invisible || this._hidePlayerForDoor) && !this.debugTriggers) return;
     const ctx = this.ctx, p = this.player;
-    const troll = p.invert.horizontal || p.invert.vertical;
     ctx.save();
+    // Rotate the whole sprite around its own center so its "feet" always
+    // face the current gravity direction — upside-down when gravity is
+    // flipped, sideways when walking on a side wall. Inverted controls
+    // (troll) are a pure gameplay effect now: no recolor, no mouth swap —
+    // there is nothing to see, on purpose.
+    const angle = { down: 0, up: Math.PI, left: Math.PI / 2, right: -Math.PI / 2 }[p.gravityDir] || 0;
+    ctx.translate(p.x + p.w / 2, p.y + p.h / 2);
+    ctx.rotate(angle);
+    ctx.translate(-p.w / 2, -p.h / 2);
+    // Everything below is drawn in LOCAL coordinates — (0,0) is the
+    // sprite's own top-left, as if gravity still pointed down.
+    const w = p.w, h = p.h;
+
     // soft drop shadow for a bit of depth
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
-    roundRect(ctx, p.x + 2, p.y + p.h - 5, p.w - 4, 6, 3);
+    roundRect(ctx, 2, h - 5, w - 4, 6, 3);
     ctx.fill();
 
-    const bodyColor = troll ? '#b5179e' : '#f77f00';
-    const bodyColor2 = troll ? '#7209b7' : '#d1600a';
-    const grad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.h);
-    grad.addColorStop(0, bodyColor);
-    grad.addColorStop(1, bodyColor2);
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, '#f77f00');
+    grad.addColorStop(1, '#d1600a');
     ctx.fillStyle = grad;
-    roundRect(ctx, p.x, p.y, p.w, p.h, p.w * 0.28);
+    roundRect(ctx, 0, 0, w, h, w * 0.28);
     ctx.fill();
     ctx.strokeStyle = 'rgba(255,255,255,0.35)';
     ctx.lineWidth = 1.5;
-    roundRect(ctx, p.x + 1, p.y + 1, p.w - 2, p.h - 2, p.w * 0.24);
+    roundRect(ctx, 1, 1, w - 2, h - 2, w * 0.24);
     ctx.stroke();
 
     // face: two eyes looking in the facing direction, small mouth
-    const eyeSize = Math.max(3, p.w * 0.16);
-    const eyeY = p.y + p.h * 0.35;
-    const spread = p.w * 0.22;
-    const cx = p.x + p.w / 2;
-    const lookOffset = p.facing * p.w * 0.06;
+    const eyeSize = Math.max(3, w * 0.16);
+    const eyeY = h * 0.35;
+    const spread = w * 0.22;
+    const cx = w / 2;
+    const lookOffset = p.facing * w * 0.06;
     ctx.fillStyle = '#fff';
     ctx.beginPath(); ctx.arc(cx - spread, eyeY, eyeSize, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(cx + spread, eyeY, eyeSize, 0, Math.PI * 2); ctx.fill();
@@ -1070,14 +1275,8 @@ export class Engine {
     ctx.strokeStyle = '#1b1e2b';
     ctx.lineWidth = 2;
     ctx.beginPath();
-    if (troll) {
-      // worried wavy mouth when controls are inverted
-      ctx.moveTo(cx - p.w * 0.18, p.y + p.h * 0.68);
-      ctx.quadraticCurveTo(cx, p.y + p.h * 0.6, cx + p.w * 0.18, p.y + p.h * 0.68);
-    } else {
-      ctx.moveTo(cx - p.w * 0.16, p.y + p.h * 0.62);
-      ctx.quadraticCurveTo(cx, p.y + p.h * 0.74, cx + p.w * 0.16, p.y + p.h * 0.62);
-    }
+    ctx.moveTo(cx - w * 0.16, h * 0.62);
+    ctx.quadraticCurveTo(cx, h * 0.74, cx + w * 0.16, h * 0.62);
     ctx.stroke();
     ctx.restore();
   }

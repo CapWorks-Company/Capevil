@@ -1,54 +1,74 @@
 # Level Devil — jeu + éditeur + niveaux communautaires
 
 Un jeu de plateforme façon **Level Devil** : blocs (posés case par case et
-assemblés sans jointure visible), pointes orientables (« inoffensif » = on
-peut les toucher sans mourir, « traversable » = on les traverse carrément),
-ressorts (haut/bas), ventilateurs à **portée réglable** (nombre de cases
-touchées par l'air, avec une diminution optionnelle de la force selon la
-distance, et un effet de **particules de vent**), roues tournantes,
-téléporteurs liés par fréquence (le « sens unique » s'applique à toute la
-fréquence d'un coup, sans possibilité de faire demi-tour), plateformes
-mobiles personnalisables en couleur, une **plaque de pression** (répète ses
-actions tant que le joueur reste dessus), des **triggers** invisibles (se
-déclenchent en entrant dans leur zone) et des **boutons** visibles
-(redeviennent pressables dès que leurs actions sont terminées, avec un
-retour optionnel des éléments déplacés à leur point de départ). Trigger,
-bouton et plaque peuvent tous les trois être mis en **boucle infinie**. Une
-mort remet tout le niveau à zéro (triggers, positions, états) sauf le
-dernier checkpoint atteint.
+assemblés sans jointure visible, y compris à la verticale), pointes
+orientables et dont l'état peut aussi **changer leur rotation en jeu** («
+inoffensif » = on peut les toucher sans mourir, « traversable » = on les
+traverse carrément), ressorts (haut/bas), ventilateurs à **portée réglable**
+(nombre de cases touchées par l'air, avec une diminution optionnelle de la
+force selon la distance) qui, tant qu'ils sont visibles, soufflent en
+permanence des **particules de vent ambiantes** le long de tout leur
+couloir de poussée (plus ou moins denses selon leur puissance, pas
+seulement quand le joueur les traverse), roues tournantes, téléporteurs
+liés par fréquence (le « sens unique » s'applique à toute la fréquence d'un
+coup, sans possibilité de faire demi-tour), plateformes mobiles
+personnalisables en couleur, une **plaque de pression** (répète ses actions
+tant que le joueur reste dessus) et des **triggers** invisibles (se
+déclenchent en entrant dans leur zone). Les **boutons** et **plaques** sont
+tous les deux **réversibles** : chaque pression rejoue leurs actions, et la
+pression suivante les rejoue automatiquement à l'envers (un élément déplacé
+revient à son point de départ, un joueur rendu invisible redevient visible,
+etc.) — « comme si on inversait le sens du temps », sans aucun réglage à
+faire. Trigger, bouton et plaque peuvent tous les trois être mis en
+**boucle infinie**. Une mort remet tout le niveau à zéro (triggers,
+positions, états) sauf le dernier checkpoint atteint, dont le drapeau garde
+toujours la même taille.
 
 Chaque trigger/bouton/plaque déclenche une liste d'actions parmi exactement
 cinq types : **déplacer un élément** (Axe X : +1 droite / -1 gauche, Axe Y :
 +1 monte / -1 descend — jamais le joueur, c'est le rôle du téléporteur),
 **téléporter un élément** (ou le joueur), **changer l'état du monde**
 (gravité, fond d'écran — jamais la taille de la grille), **changer l'état
-d'un élément** (traversable / invisible / inoffensif) et **changer l'état du
-joueur** (gravité, touches inversées façon troll, visibilité, puissance de
-saut/déplacement). Le point de départ du joueur a lui-même un état
-configurable : centre de gravité au spawn et visibilité (même invisible, le
-son et les particules restent actifs).
+d'un élément** (traversable / invisible / inoffensif / **rotation**, pour
+faire pivoter des pointes par exemple) et **changer l'état du joueur**
+(gravité, touches inversées façon troll, visibilité, puissance de
+saut/déplacement). Ces changements d'état du joueur ont aussi un rendu
+soigné : la gravité inversée **retourne visuellement le joueur** dans le
+sens de sa nouvelle chute (fini le recolorage violet façon troll quand les
+touches sont inversées — plus rien ne change visuellement dans ce cas), et
+devenir invisible ou réapparaître déclenche un petit **effet de particules
+et de son**. Le point de départ du joueur a lui-même un état configurable :
+centre de gravité au spawn et visibilité (même invisible, le son et les
+particules restent actifs).
 
-La roue tournante (spinner) a une **hitbox circulaire** (et non plus son
-simple carré englobant), et chaque action de jeu a un petit **effet sonore
-synthétisé** (saut, atterrissage, mort, victoire, checkpoint, téléporteur,
-ressort, bouton — aucun fichier audio externe, tout est généré à la volée
-avec la Web Audio API) accompagné de **particules** (poussière aux pieds,
-explosion à la mort, confettis à la victoire, vent du ventilateur) et d'un
-léger **tremblement de caméra** à la mort. Le son est réglable (muet +
-volume) et sauvegardé dans le navigateur.
+L'arrivée est désormais une **porte bleue** : le joueur y est « aspiré » à
+l'intérieur, la porte se referme en une courte animation, puis le niveau
+est gagné. La roue tournante (spinner) a une **hitbox circulaire** (et non
+plus son simple carré englobant), et chaque action de jeu a un petit
+**effet sonore synthétisé** (saut, atterrissage, mort, victoire, checkpoint,
+téléporteur, ressort, bouton, apparition/disparition — aucun fichier audio
+externe, tout est généré à la volée avec la Web Audio API) accompagné de
+**particules** (poussière aux pieds, explosion à la mort, confettis à la
+victoire, vent du ventilateur, dissolution/matérialisation) et d'un léger
+**tremblement de caméra** à la mort. La caméra reste centrée sur le joueur
+en permanence (elle ne dérive jamais vers le centre du niveau). Le son est
+réglable (muet + volume) et sauvegardé dans le navigateur.
 
 Inclut un éditeur de niveaux complet (grille dont seules les colonnes
 9-80 et les lignes 9-30 sont modifiables — toute la zone est toujours
 éditable, plus de bornes séparées à gérer —, et une bascule vue debug / vue
-réelle en playtest), des **comptes joueurs** (Supabase Auth, via une
-**fenêtre modale** de connexion/inscription) pour publier sous son vrai nom
-et gérer (modifier/supprimer) ses propres niveaux, un système de **likes**,
-une file de **demandes d'approbation** avec un espace **admin** pour
-promouvoir des niveaux en « Parties officielles », et un **signalement**
-réservé à ces niveaux officiels. Les touches (gauche/droite/haut/bas/saut)
-sont **remappables** et sauvegardées dans le navigateur. Le site affiche un
-panneau plein écran invitant à revenir sur ordinateur pour toute visite
-mobile/tablette, car le jeu comme l'éditeur sont pensés clavier + souris.
+réelle en playtest), avec un panneau de propriétés organisé en **sections
+bien distinctes** (état, réglages spécifiques à l'élément, actions…) plutôt
+qu'une longue liste plate de champs, des **comptes joueurs** (Supabase
+Auth, via une **fenêtre modale** de connexion/inscription) pour publier
+sous son vrai nom et gérer (modifier/supprimer) ses propres niveaux, un
+système de **likes**, une file de **demandes d'approbation** avec un espace
+**admin** pour promouvoir des niveaux en « Parties officielles », et un
+**signalement** réservé à ces niveaux officiels. Les touches
+(gauche/droite/haut/bas/saut) sont **remappables** et sauvegardées dans le
+navigateur. Le site affiche un panneau plein écran invitant à revenir sur
+ordinateur pour toute visite mobile/tablette, car le jeu comme l'éditeur
+sont pensés clavier + souris.
 
 Toute l'interface passe par de petits **panels et fenêtres modales** plutôt
 que par les popups natives du navigateur : confirmations, saisies (raison

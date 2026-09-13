@@ -41,6 +41,13 @@ export class ParticleSystem {
     this.burst(x, y, { count: 46, colors: ['#ffd166', '#06d6a0', '#4cc9f0', '#f72585', '#ffffff'], speed: 280, angle: -Math.PI / 2, spread: Math.PI, gravity: 480, life: 1.2, size: 5 });
   }
 
+  // A little magical "poof" when the player turns invisible or visible
+  // again — a burst of light motes with no gravity, so it reads as a
+  // dissolve/materialize rather than debris falling.
+  poof(x, y) {
+    this.burst(x, y, { count: 16, colors: ['#c9d6ff', '#8fa8ff', '#ffffff'], speed: 160, spread: Math.PI * 2, gravity: 0, life: 0.4, size: 3.5 });
+  }
+
   // A brief streak blown in the wind's direction — called probabilistically
   // (not every frame) by the fan's continuous push, so it doesn't need to
   // self-throttle. `v` is one of the unit GRAVITY_VECTORS; `strength` (0-1+)

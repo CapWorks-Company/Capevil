@@ -334,14 +334,33 @@ function drawEntity(ent) {
       if (ent.props.oneUse) { ctx.font = '8px sans-serif'; ctx.fillStyle = color; ctx.fillText('1×', x + w / 2, y + h - 3); }
       break;
     }
-    case ENTITY_TYPES.CHECKPOINT:
-      ctx.fillStyle = '#118ab2'; ctx.fillRect(x + w * 0.4, y, w * 0.1, h);
-      ctx.beginPath(); ctx.moveTo(x + w * 0.5, y + h * 0.1); ctx.lineTo(x + w * 0.9, y + h * 0.3); ctx.lineTo(x + w * 0.5, y + h * 0.5); ctx.fill();
+    case ENTITY_TYPES.CHECKPOINT: {
+      const poleX = x + w * 0.34, poleW = Math.max(2, w * 0.07), poleTopY = y + h * 0.04;
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath(); ctx.ellipse(poleX + poleW / 2, y + h - 1, w * 0.22, Math.max(1.5, h * 0.035), 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#5fa9bc'; ctx.fillRect(poleX, poleTopY, poleW, y + h - poleTopY);
+      ctx.fillStyle = '#eafdff'; ctx.beginPath(); ctx.arc(poleX + poleW / 2, poleTopY, Math.max(2, w * 0.05), 0, Math.PI * 2); ctx.fill();
+      const flagTop = poleTopY + h * 0.06, flagH = h * 0.36, flagW = w * 0.52;
+      const grad = ctx.createLinearGradient(poleX, flagTop, poleX + flagW, flagTop);
+      grad.addColorStop(0, '#5fe0f2'); grad.addColorStop(1, '#0f8fae');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(poleX + poleW, flagTop);
+      ctx.quadraticCurveTo(poleX + flagW * 0.6, flagTop + flagH * 0.16, poleX + flagW, flagTop + flagH * 0.4);
+      ctx.quadraticCurveTo(poleX + flagW * 0.6, flagTop + flagH * 0.64, poleX + poleW, flagTop + flagH);
+      ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)'; ctx.lineWidth = 1; ctx.stroke();
       break;
-    case ENTITY_TYPES.GOAL:
-      ctx.fillStyle = '#2ec4b6'; ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('⚑', x + w / 2, y + h / 2 + 5);
+    }
+    case ENTITY_TYPES.GOAL: {
+      // A blue doorway, shown open (matches its idle in-game look — it only
+      // slides shut once the player actually walks in).
+      const insetX = Math.max(2, w * 0.08), insetY = Math.max(2, h * 0.04);
+      ctx.fillStyle = '#1b2a4a'; ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = '#05060a'; ctx.fillRect(x + insetX, y + insetY, w - insetX * 2, h - insetY);
+      ctx.fillStyle = '#2d6cdf'; ctx.fillRect(x + insetX, y + insetY, (w - insetX * 2) * 0.16, h - insetY);
       break;
+    }
     case ENTITY_TYPES.TRIGGER:
       ctx.fillStyle = 'rgba(244,211,94,0.25)'; ctx.strokeStyle = '#f4d35e';
       ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
@@ -452,6 +471,15 @@ function handleCellClick(cx, cy) {
 }
 
 // ---------------------------------------------------------------- properties panel
+// Wraps a block of fields in a titled card — this is what gives the props
+// panel visual sections (État, Orientation, Ventilateur…) instead of one
+// long flat run of labels. `bodyHtml` is skipped entirely if empty, so
+// callers can build it unconditionally without an extra guard.
+function fieldGroup(title, bodyHtml) {
+  if (!bodyHtml) return '';
+  return `<div class="field-group"><div class="section-title">${title}</div>${bodyHtml}</div>`;
+}
+
 function renderProps() {
   if (!selectedId) {
     propsEl.innerHTML = '<h3 style="margin-top:0;">Propriétés</h3><p class="muted">Sélectionne un élément sur la grille (outil « Sélection ») pour l\'éditer.</p>';
@@ -462,8 +490,7 @@ function renderProps() {
   if (!ent) { selectedId = null; return renderProps(); }
 
   const html = [];
-  html.push('<h3 style="margin-top:0;">Propriétés</h3>');
-  html.push(`<div class="pill">${paletteLabel(ent.type)}</div>`);
+  html.push(`<div class="props-header"><h3>Propriétés</h3><div class="pill type-badge">${paletteLabel(ent.type)}</div></div>`);
   html.push('<div class="props-panel">');
   html.push(`<label>Position (colonne / ligne)</label>
     <div class="row">
@@ -472,8 +499,9 @@ function renderProps() {
     </div>`);
 
   // Solid blocks are placed one cell at a time and never resized (they
-  // assemble seamlessly instead) — so the size fields simply don't apply.
-  if (ent.type !== ENTITY_TYPES.BLOCK) {
+  // assemble seamlessly instead), and a checkpoint's flag is always drawn at
+  // the same fixed size — so the size fields simply don't apply to either.
+  if (ent.type !== ENTITY_TYPES.BLOCK && ent.type !== ENTITY_TYPES.CHECKPOINT) {
     html.push(`<label>Taille (largeur / hauteur en cases)</label>
       <div class="row">
         <input type="number" id="p-w" value="${ent.w}" min="1" max="${level.cols}" />
@@ -483,55 +511,56 @@ function renderProps() {
 
   const toggles = togglesForType(ent.type);
   if (toggles.length) {
-    html.push('<label>État</label>');
-    html.push('<div class="toggle-list">');
-    for (const t of toggles) {
-      html.push(`<label class="toggle-row"><input type="checkbox" data-toggle="${t}" ${ent[t] ? 'checked' : ''} />${TOGGLE_LABELS[t]}</label>`);
-    }
-    html.push('</div>');
+    const rows = toggles.map(t => `<label class="toggle-row"><input type="checkbox" data-toggle="${t}" ${ent[t] ? 'checked' : ''} />${TOGGLE_LABELS[t]}</label>`).join('');
+    html.push(fieldGroup('État', `<div class="toggle-list">${rows}</div>`));
   }
 
   if (ent.type === ENTITY_TYPES.SPIKE) {
-    html.push('<label>Orientation</label>');
-    html.push(selectHtml('p-facing', FACING_LABELS, ent.props.facing || 'up'));
+    html.push(fieldGroup('Orientation', `
+      ${selectHtml('p-facing', FACING_LABELS, ent.props.facing || 'up')}`));
   }
   if (ent.type === ENTITY_TYPES.SPRING) {
-    html.push('<label>Direction (haut / bas uniquement)</label>');
-    html.push(selectHtml('p-dir', { up: GRAVITY_LABELS.up, down: GRAVITY_LABELS.down }, ent.props.direction || 'up'));
-    html.push('<label>Puissance (x saut normal)</label>');
-    html.push(`<input type="number" id="p-power" value="${ent.props.power ?? 1.6}" step="0.1" min="0.2" max="5" />`);
+    html.push(fieldGroup('Ressort', `
+      <label>Direction (haut / bas uniquement)</label>
+      ${selectHtml('p-dir', { up: GRAVITY_LABELS.up, down: GRAVITY_LABELS.down }, ent.props.direction || 'up')}
+      <label>Puissance (x saut normal)</label>
+      <input type="number" id="p-power" value="${ent.props.power ?? 1.6}" step="0.1" min="0.2" max="5" />`));
   }
   if (ent.type === ENTITY_TYPES.FAN) {
-    html.push('<label>Direction du vent</label>');
-    html.push(selectHtml('p-fandir', GRAVITY_LABELS, ent.props.direction || 'right'));
-    html.push('<label>Force du vent</label>');
-    html.push(`<input type="number" id="p-force" value="${ent.props.force ?? 1}" step="0.1" min="0.1" max="4" />`);
-    html.push('<label>Portée (nombre de cases touchées par l\'air)</label>');
-    html.push(`<input type="number" id="p-range" value="${ent.props.range ?? 5}" step="1" min="0" max="40" />`);
-    html.push(`<label class="toggle-row" style="margin-top:8px;"><input type="checkbox" id="p-falloff" ${ent.props.falloff ? 'checked' : ''} />Diminution en fonction de la distance</label>`);
-    html.push('<p class="muted" style="font-size:12px;margin:4px 0 0;">Ex. avec une portée de 5 cases, un joueur à 4 cases est encore propulsé ; au-delà de 5, plus rien.</p>');
+    html.push(fieldGroup('Ventilateur', `
+      <label>Direction du vent</label>
+      ${selectHtml('p-fandir', GRAVITY_LABELS, ent.props.direction || 'right')}
+      <label>Force du vent</label>
+      <input type="number" id="p-force" value="${ent.props.force ?? 1}" step="0.1" min="0.1" max="4" />
+      <label>Portée (nombre de cases touchées par l'air)</label>
+      <input type="number" id="p-range" value="${ent.props.range ?? 5}" step="1" min="0" max="40" />
+      <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-falloff" ${ent.props.falloff ? 'checked' : ''} />Diminution en fonction de la distance</label>
+      <p class="hint">Ex. avec une portée de 5 cases, un joueur à 4 cases est encore propulsé ; au-delà de 5, plus rien.</p>`));
   }
   if (ent.type === ENTITY_TYPES.SPINNER) {
-    html.push('<label>Vitesse de rotation</label>');
-    html.push(`<input type="number" id="p-speed" value="${ent.props.speed ?? 2}" step="0.1" min="0.1" max="10" />`);
+    html.push(fieldGroup('Rotation', `
+      <label>Vitesse de rotation</label>
+      <input type="number" id="p-speed" value="${ent.props.speed ?? 2}" step="0.1" min="0.1" max="10" />`));
   }
   if (ent.type === ENTITY_TYPES.PLATFORM) {
-    html.push('<label>Couleur (pour ressembler à un bloc solide)</label>');
-    html.push(`<div class="row" style="align-items:center;gap:8px;">
-      <input type="color" id="p-color" value="${ent.props.color || '#2d6cdf'}" style="width:52px;height:32px;padding:2px;flex:none;" />
-      <button class="btn small" id="p-color-reset" type="button">Couleur par défaut</button>
-    </div>`);
+    html.push(fieldGroup('Apparence', `
+      <label>Couleur (pour ressembler à un bloc solide)</label>
+      <div class="row" style="align-items:center;gap:8px;">
+        <input type="color" id="p-color" value="${ent.props.color || '#2d6cdf'}" style="width:52px;height:32px;padding:2px;flex:none;" />
+        <button class="btn small" id="p-color-reset" type="button">Couleur par défaut</button>
+      </div>`));
   }
   if (ent.type === ENTITY_TYPES.TELEPORTER) {
-    html.push('<label>Fréquence (relie les téléporteurs, max 3 par fréquence)</label>');
     const freqLabels = {};
     for (const f of TELEPORTER_FREQUENCIES) freqLabels[f] = `Fréquence ${f} (${teleporterGroupCount(f, ent.id)}/${TELEPORTER_MAX_PER_FREQUENCY})`;
-    html.push(selectHtml('p-freq', freqLabels, ent.props.frequency || 1));
-    html.push(`<label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-oneuse" ${ent.props.oneUse ? 'checked' : ''} />Sens unique (utilisable une seule fois)</label>`);
-    html.push('<p class="muted" style="font-size:12px;margin:4px 0 0;">S\'applique à toute la fréquence : les téléporteurs liés deviennent tous « sens unique » ensemble, et l\'aller-retour est impossible une fois emprunté.</p>');
+    html.push(fieldGroup('Téléportation', `
+      <label>Fréquence (relie les téléporteurs, max 3 par fréquence)</label>
+      ${selectHtml('p-freq', freqLabels, ent.props.frequency || 1)}
+      <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-oneuse" ${ent.props.oneUse ? 'checked' : ''} />Sens unique (utilisable une seule fois)</label>
+      <p class="hint">S'applique à toute la fréquence : les téléporteurs liés deviennent tous « sens unique » ensemble, et l'aller-retour est impossible une fois emprunté.</p>`));
   }
 
-  html.push('<button class="btn danger small" id="delete-ent" style="margin-top:14px;width:100%;">Supprimer cet élément</button>');
+  html.push('<button class="btn danger small" id="delete-ent" style="margin-top:4px;width:100%;">Supprimer cet élément</button>');
   html.push('</div>');
 
   if (ent.type === ENTITY_TYPES.TRIGGER) html.push(renderTriggerEditor(ent));
@@ -545,18 +574,18 @@ function renderProps() {
 function renderPlayerStartProps() {
   const ps = level.playerStart;
   const html = [];
-  html.push('<h3 style="margin-top:0;">Propriétés</h3>');
-  html.push('<div class="pill">🧍 Départ joueur</div>');
+  html.push('<div class="props-header"><h3>Propriétés</h3><div class="pill type-badge">🧍 Départ joueur</div></div>');
   html.push('<div class="props-panel">');
   html.push(`<label>Position (colonne / ligne)</label>
     <div class="row">
       <input type="number" id="p-x" value="${ps.x}" min="0" max="${level.cols - 1}" />
       <input type="number" id="p-y" value="${ps.y}" min="0" max="${level.rows - 1}" />
     </div>`);
-  html.push('<label>Centre de gravité au départ</label>');
-  html.push(selectHtml('p-ps-gravity', GRAVITY_LABELS, ps.gravityDir || 'down'));
-  html.push(`<label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-ps-invisible" ${ps.invisible ? 'checked' : ''} />Joueur invisible au départ</label>`);
-  html.push('<p class="muted" style="font-size:12px;margin:4px 0 0;">Même invisible, le joueur reste bien présent : le son et les particules (saut, atterrissage, mort…) continuent de fonctionner normalement.</p>');
+  html.push(fieldGroup('État initial', `
+    <label>Centre de gravité au départ</label>
+    ${selectHtml('p-ps-gravity', GRAVITY_LABELS, ps.gravityDir || 'down')}
+    <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-ps-invisible" ${ps.invisible ? 'checked' : ''} />Joueur invisible au départ</label>
+    <p class="hint">Même invisible, le joueur reste bien présent : le son et les particules (saut, atterrissage, mort…) continuent de fonctionner normalement.</p>`));
   html.push('</div>');
   propsEl.innerHTML = html.join('');
 
@@ -643,8 +672,6 @@ function bindPropsInputs(ent) {
   // trigger/button/plate-specific bindings
   const loopChk = document.getElementById('p-loop');
   if (loopChk) loopChk.addEventListener('change', () => { ent.props.loop = loopChk.checked; render(); renderProps(); });
-  const resetSel = document.getElementById('p-reset');
-  if (resetSel) resetSel.addEventListener('change', () => { ent.props.resetAfterActions = resetSel.value; });
   const addActionBtn = document.getElementById('add-action');
   if (addActionBtn) addActionBtn.addEventListener('click', () => {
     ent.props.actions.push(createAction(ACTION_TYPES.MOVE_ELEMENT, { params: defaultParamsFor(ACTION_TYPES.MOVE_ELEMENT) }));
@@ -657,49 +684,35 @@ function clampInt(v, min, max) { return Math.max(min, Math.min(max, Math.round(v
 
 // ------------------------------------------------------- trigger/button/plate UI
 function renderLoopCheckbox(ent) {
-  return `<label class="toggle-row" style="margin:10px 0;"><input type="checkbox" id="p-loop" ${ent.props.loop ? 'checked' : ''} />Boucle infinie (une fois déclenché, répète les actions pour toujours)</label>`;
+  return `<label class="toggle-row" style="margin-top:8px;"><input type="checkbox" id="p-loop" ${ent.props.loop ? 'checked' : ''} />Boucle infinie (une fois déclenché, répète les actions pour toujours)</label>`;
+}
+
+// Shared shape for TRIGGER/BUTTON/PLATE: a titled card explaining how it
+// fires, the loop checkbox, then its list of actions with an "add" button.
+function renderActionListEditor(title, hintHtml, actionsLabel, ent) {
+  const body = `
+    <p class="hint" style="margin-top:0;">${hintHtml}</p>
+    ${renderLoopCheckbox(ent)}
+    <label style="margin-top:14px;">${actionsLabel}</label>
+    <div id="actions-list">${(ent.props.actions || []).map((a) => renderActionRow(ent, a)).join('')}</div>
+    <button class="btn small" id="add-action" style="width:100%;margin-top:6px;">+ Ajouter une action</button>`;
+  return fieldGroup(title, body);
 }
 
 function renderTriggerEditor(ent) {
-  const html = [];
-  html.push('<hr class="props-sep">');
-  html.push('<h4 style="margin:0 0 6px;">Trigger</h4>');
-  html.push('<p class="muted" style="font-size:12px;margin:0 0 6px;">Se déclenche dès que le joueur entre dans la zone.</p>');
-  html.push(renderLoopCheckbox(ent));
-  html.push('<label style="margin-top:14px;">Actions déclenchées</label>');
-  html.push('<div id="actions-list">' + (ent.props.actions || []).map((a) => renderActionRow(ent, a)).join('') + '</div>');
-  html.push('<button class="btn small" id="add-action" style="width:100%;margin-top:6px;">+ Ajouter une action</button>');
-  return html.join('');
+  return renderActionListEditor('Trigger', 'Se déclenche dès que le joueur entre dans la zone.', 'Actions déclenchées', ent);
 }
 
 function renderButtonEditor(ent) {
-  const html = [];
-  html.push('<hr class="props-sep">');
-  html.push('<h4 style="margin:0 0 6px;">Bouton</h4>');
-  html.push(renderLoopCheckbox(ent));
-  html.push('<label>Retour au point de départ après les actions</label>');
-  html.push(selectHtml('p-reset', {
-    none: 'Non',
-    afterActions: 'Oui — dès la fin des actions',
-    onNextPress: 'Oui — au prochain clic du bouton',
-  }, ent.props.resetAfterActions || 'none'));
-  html.push('<p class="muted" style="font-size:12px;margin:4px 0 0;">Ex. si une action déplace un bloc, il peut revenir à son point de départ automatiquement, ou seulement au prochain clic. Sans effet si « Boucle infinie » est cochée.</p>');
-  html.push('<label style="margin-top:14px;">Actions déclenchées à chaque pression</label>');
-  html.push('<div id="actions-list">' + (ent.props.actions || []).map((a) => renderActionRow(ent, a)).join('') + '</div>');
-  html.push('<button class="btn small" id="add-action" style="width:100%;margin-top:6px;">+ Ajouter une action</button>');
-  return html.join('');
+  return renderActionListEditor('Bouton',
+    'À chaque pression, le bouton alterne : il joue les actions, puis au clic suivant il les rejoue à l\'envers (retour à l\'état initial), et ainsi de suite. Sans effet si « Boucle infinie » est cochée.',
+    'Actions déclenchées à chaque pression', ent);
 }
 
 function renderPlateEditor(ent) {
-  const html = [];
-  html.push('<hr class="props-sep">');
-  html.push('<h4 style="margin:0 0 6px;">Plaque de pression</h4>');
-  html.push('<p class="muted" style="font-size:12px;margin:0 0 6px;">Tant que le joueur reste dessus, les actions se répètent automatiquement (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus.</p>');
-  html.push(renderLoopCheckbox(ent));
-  html.push('<label style="margin-top:14px;">Actions déclenchées</label>');
-  html.push('<div id="actions-list">' + (ent.props.actions || []).map((a) => renderActionRow(ent, a)).join('') + '</div>');
-  html.push('<button class="btn small" id="add-action" style="width:100%;margin-top:6px;">+ Ajouter une action</button>');
-  return html.join('');
+  return renderActionListEditor('Plaque de pression',
+    'Tant que le joueur reste dessus, les actions se répètent automatiquement (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus.',
+    'Actions déclenchées', ent);
 }
 
 function defaultParamsFor(type) {
@@ -716,9 +729,9 @@ function defaultParamsFor(type) {
 // those two action types is independently opt-in, since e.g. changing
 // gravity shouldn't force you to also pick a background color.
 function optionalBlock(key, label, innerHtml, enabled) {
-  return `<div class="ws-block" data-ws-block="${key}">
+  return `<div class="ws-block ${enabled ? 'is-on' : 'is-off'}" data-ws-block="${key}">
     <label class="toggle-row"><input type="checkbox" data-ws-enable="${key}" ${enabled ? 'checked' : ''} />${label}</label>
-    <div data-ws-inner="${key}" style="margin:2px 0 10px 24px;${enabled ? '' : 'opacity:.4;pointer-events:none;'}">${innerHtml}</div>
+    <div data-ws-inner="${key}" style="margin:8px 0 2px 24px;${enabled ? '' : 'pointer-events:none;'}">${innerHtml}</div>
   </div>`;
 }
 
@@ -769,6 +782,7 @@ const WS_BLOCK_KEYS = {
   invisible: ['invisible'],
   jumpMult: ['jumpMult'],
   speedMult: ['speedMult'],
+  facing: ['facing'],
 };
 
 function setActionParamFromInput(action, el) {
@@ -786,11 +800,14 @@ function bindOptionalFields(action, row) {
     chk.addEventListener('change', () => {
       const key = chk.dataset.wsEnable;
       const inner = row.querySelector(`[data-ws-inner="${key}"]`);
+      const block = row.querySelector(`[data-ws-block="${key}"]`);
       if (chk.checked) {
-        if (inner) { inner.style.opacity = ''; inner.style.pointerEvents = ''; }
+        if (inner) inner.style.pointerEvents = '';
+        if (block) block.classList.replace('is-off', 'is-on');
         (inner ? inner.querySelectorAll('[data-ws-value]') : []).forEach((el) => setActionParamFromInput(action, el));
       } else {
-        if (inner) { inner.style.opacity = '.4'; inner.style.pointerEvents = 'none'; }
+        if (inner) inner.style.pointerEvents = 'none';
+        if (block) block.classList.replace('is-on', 'is-off');
         for (const k of (WS_BLOCK_KEYS[key] || [key])) delete action.params[k];
         // statDuration is shared between jumpMult and speedMult: only drop it
         // once neither of those two is enabled anymore.
@@ -827,7 +844,10 @@ function renderActionRow(ent, action) {
     case ACTION_TYPES.SET_STATE:
       fields = `<label>Nouvel état de la cible</label><div class="toggle-list">
         ${ENTITY_TOGGLES.map(t => `<label class="toggle-row"><input type="checkbox" data-f="${t}" data-bool="1" ${p[t] ? 'checked' : ''} />${TOGGLE_LABELS[t]}</label>`).join('')}
-      </div>`;
+      </div>
+      ${optionalBlock('facing', 'Rotation (ex. pointes)',
+        selectHtml('', FACING_LABELS, p.facing || 'up').replace('id=""', 'data-ws-value="facing"'),
+        'facing' in p)}`;
       break;
     case ACTION_TYPES.SET_WORLD_STATE:
       fields = renderWorldStateFields(p);

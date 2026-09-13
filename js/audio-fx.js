@@ -112,4 +112,6 @@ export const sfx = {
   teleport()   { tone({ freq: 220, freqEnd: 1500, type: 'sine', duration: 0.24, gain: 0.18 }); },
   spring()     { tone({ freq: 180, freqEnd: 560, type: 'square', duration: 0.18, gain: 0.2 }); },
   button()     { tone({ freq: 520, type: 'square', duration: 0.06, gain: 0.14 }); },
+  vanish()     { tone({ freq: 900, freqEnd: 220, type: 'sine', duration: 0.22, gain: 0.14 }); noiseBurst({ duration: 0.12, gain: 0.08, filterFreq: 2200 }); },
+  appear()     { tone({ freq: 220, freqEnd: 900, type: 'sine', duration: 0.22, gain: 0.14 }); noiseBurst({ duration: 0.12, gain: 0.08, filterFreq: 2200 }); },
 };
