@@ -84,11 +84,20 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
       break;
     case ENTITY_TYPES.BUTTON:
       base.w = 1; base.h = 1;
-      base.props = { actions: [], loop: false };
+      // "reversible" is opt-in: off by default, a button always replays its
+      // actions forward; turning it on makes successive presses alternate
+      // forward/undone instead.
+      base.props = { actions: [], loop: false, reversible: false };
       break;
     case ENTITY_TYPES.PLATE:
       base.w = 1; base.h = 1;
-      base.props = { actions: [], loop: false };
+      base.props = { actions: [], loop: false, reversible: false };
+      break;
+    case ENTITY_TYPES.CRATE:
+      // Same footprint as a block by default; freely resizable like a
+      // platform (a bigger crate is just heavier-looking, physics-wise it
+      // behaves the same).
+      base.w = 1; base.h = 1;
       break;
     default:
       break;
@@ -222,10 +231,14 @@ export function normalizeLevel(rawLevel) {
     }
     if (e.type === ENTITY_TYPES.BUTTON) {
       e.props.loop = !!e.props.loop;
-      // "resetAfterActions" is gone — every button/plate press now
-      // automatically alternates forward/reverse of its own accord (see
-      // engine.js's _fireTrigger), so there's nothing left to configure.
       delete e.props.mode; delete e.props.loopInterval; delete e.props.cooldown; delete e.props.resetAfterActions;
+    }
+    if (e.type === ENTITY_TYPES.BUTTON || e.type === ENTITY_TYPES.PLATE) {
+      // "reversible" is opt-in (default off): only when explicitly enabled
+      // does a button/plate alternate forward/reverse on successive
+      // activations (see engine.js's _fireTrigger) — otherwise it always
+      // plays its actions forward, every time.
+      e.props.reversible = !!e.props.reversible;
     }
     if (e.type === ENTITY_TYPES.PLATFORM) {
       // Appearance is now an explicit choice: a custom/default color (a

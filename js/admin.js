@@ -51,7 +51,7 @@ async function refreshPending() {
         <div class="muted" style="font-size:12px;">par ${escapeHtml(lvl.author) || '—'} · ${lvl.plays} parties · ❤ ${lvl.likes ?? 0}</div>
       </div>
       <div style="display:flex;gap:6px;">
-        <a class="btn small" href="game.html?id=${lvl.id}">Aperçu</a>
+        <a class="btn small" href="editor.html?preview=${lvl.id}" target="_blank" rel="noopener">👁️ Aperçu complet</a>
         <button class="btn small accent" data-approve="${lvl.id}">✓ Approuver</button>
       </div>
     </div>
@@ -76,7 +76,7 @@ async function refreshReports() {
         <div class="muted" style="font-size:12px;">${escapeHtml(r.reason)}</div>
       </div>
       <div style="display:flex;gap:6px;">
-        <a class="btn small" href="game.html?id=${r.level_id}">Aperçu</a>
+        <a class="btn small" href="editor.html?preview=${r.level_id}" target="_blank" rel="noopener">👁️ Aperçu complet</a>
         <button class="btn small danger" data-unapprove="${r.level_id}">Retirer le statut officiel</button>
         <button class="btn small" data-dismiss="${r.id}">Ignorer</button>
       </div>
@@ -108,7 +108,10 @@ async function refreshAllOfficial() {
         <strong>${escapeHtml(lvl.title)}</strong>
         <div class="muted" style="font-size:12px;">par ${escapeHtml(lvl.author) || '—'}</div>
       </div>
-      <button class="btn small danger" data-unapprove2="${lvl.id}">Retirer le statut officiel</button>
+      <div style="display:flex;gap:6px;">
+        <a class="btn small" href="editor.html?preview=${lvl.id}" target="_blank" rel="noopener">👁️ Aperçu complet</a>
+        <button class="btn small danger" data-unapprove2="${lvl.id}">Retirer le statut officiel</button>
+      </div>
     </div>
   `).join('');
   allListEl.querySelectorAll('button[data-unapprove2]').forEach((btn) => {

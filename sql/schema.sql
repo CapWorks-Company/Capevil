@@ -204,8 +204,11 @@ create trigger set_level_author_on_insert
 drop trigger if exists set_level_author_on_update on public.levels;
 
 -- ----------------------------------------------------------------------------
--- Compteurs de parties (plays / wins / likes), via une fonction
--- SECURITY DEFINER pour pouvoir incrémenter sans ouvrir un accès UPDATE général.
+-- Compteurs de parties (plays / wins), via une fonction SECURITY DEFINER pour
+-- pouvoir incrémenter sans ouvrir un accès UPDATE général. "likes" n'est
+-- volontairement plus géré ici depuis qu'un like doit être limité à une fois
+-- par compte — voir like_level() plus bas, qui est le seul chemin autorisé à
+-- toucher la colonne levels.likes.
 -- ----------------------------------------------------------------------------
 create or replace function public.increment_level_stat(level_id uuid, stat text)
 returns void
@@ -218,10 +221,8 @@ begin
     update public.levels set plays = plays + 1 where id = level_id;
   elsif stat = 'wins' then
     update public.levels set wins = wins + 1 where id = level_id;
-  elsif stat = 'likes' then
-    update public.levels set likes = likes + 1 where id = level_id;
   else
-    raise exception 'unknown stat %', stat;
+    raise exception 'unknown stat % (likes go through like_level(), not increment_level_stat)', stat;
   end if;
 end;
 $$;
@@ -229,8 +230,69 @@ $$;
 grant execute on function public.increment_level_stat(uuid, text) to anon, authenticated;
 
 -- ----------------------------------------------------------------------------
--- Demande d'approbation : n'importe quel joueur connecté peut demander qu'un
--- admin examine un niveau pour l'ajouter aux "Parties officielles".
+-- Likes : un compte ne peut liker un niveau donné qu'une seule fois. La table
+-- de jointure fait respecter ça via sa clé primaire composite ; like_level()
+-- est le seul chemin qui incrémente public.levels.likes, et ne le fait que
+-- lorsque la ligne de jointure vient d'être insérée pour de vrai (pas un
+-- doublon silencieusement ignoré par ON CONFLICT).
+-- ----------------------------------------------------------------------------
+create table if not exists public.level_likes (
+  level_id    uuid not null references public.levels(id) on delete cascade,
+  user_id     uuid not null references auth.users(id) on delete cascade,
+  created_at  timestamptz not null default now(),
+  primary key (level_id, user_id)
+);
+
+alter table public.level_likes enable row level security;
+
+-- Un joueur peut voir quels niveaux il a lui-même likés (pour griser le
+-- bouton "Liker" côté client) — jamais les likes des autres.
+drop policy if exists "users can see their own likes" on public.level_likes;
+create policy "users can see their own likes"
+  on public.level_likes for select
+  to authenticated
+  using (user_id = auth.uid());
+
+-- Pas de policy INSERT/DELETE publique : tout passe par like_level()
+-- ci-dessous, qui garde la colonne levels.likes synchronisée avec la table
+-- de jointure dans la même transaction.
+create or replace function public.like_level(p_level_id uuid)
+returns boolean -- true si ce like vient d'être enregistré, false si déjà liké avant
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.level_likes (level_id, user_id)
+  values (p_level_id, auth.uid())
+  on conflict (level_id, user_id) do nothing;
+  if found then
+    update public.levels set likes = likes + 1 where id = p_level_id;
+    return true;
+  end if;
+  return false;
+end;
+$$;
+
+grant execute on function public.like_level(uuid) to authenticated;
+
+create or replace function public.has_liked_level(p_level_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.level_likes where level_id = p_level_id and user_id = auth.uid()
+  );
+$$;
+
+grant execute on function public.has_liked_level(uuid) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- Demande d'approbation : réservée au créateur du niveau (owner_id) — jamais
+-- un autre joueur, même connecté.
 -- ----------------------------------------------------------------------------
 create or replace function public.request_level_approval(level_id uuid)
 returns void
@@ -241,7 +303,10 @@ as $$
 begin
   update public.levels
     set approval_requested = true
-    where id = level_id and approved = false;
+    where id = level_id and approved = false and owner_id = auth.uid();
+  if not found then
+    raise exception 'not found, already approved, or not the level owner';
+  end if;
 end;
 $$;
 

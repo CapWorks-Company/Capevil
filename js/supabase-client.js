@@ -185,11 +185,45 @@ export async function recordWin(id) {
 }
 
 // ---------------------------------------------------------------- likes
+// A like is capped at one per account (enforced server-side by the
+// level_likes join table's primary key — see sql/schema.sql). `like_level`
+// returns { liked: true } the first time and { liked: false } on every
+// repeat call for the same account+level (already liked, nothing changed).
 export async function likeLevel(id) {
   const client = await getClient();
   if (!client) return { error: 'not_configured' };
-  const { error } = await client.rpc('increment_level_stat', { level_id: id, stat: 'likes' });
-  return { error };
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return { error: 'not_signed_in' };
+  const { data, error } = await client.rpc('like_level', { p_level_id: id });
+  return { error, liked: !!data };
+}
+
+// Whether the signed-in account has already liked this level. Always false
+// when signed out (no account to have liked anything with).
+export async function hasLikedLevel(id) {
+  const client = await getClient();
+  if (!client) return false;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return false;
+  const { data, error } = await client.rpc('has_liked_level', { p_level_id: id });
+  if (error) return false;
+  return !!data;
+}
+
+// Bulk version for list views: which of these level ids has the signed-in
+// account already liked. Returns an empty Set when signed out.
+export async function getMyLikedLevelIds(ids) {
+  const client = await getClient();
+  if (!client || !ids || !ids.length) return new Set();
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return new Set();
+  const { data, error } = await client
+    .from('level_likes')
+    .select('level_id')
+    .eq('user_id', session.user.id)
+    .in('level_id', ids);
+  if (error) return new Set();
+  return new Set(data.map((r) => r.level_id));
 }
 
 // ---------------------------------------------------------- approval flow

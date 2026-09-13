@@ -1,4 +1,4 @@
-import { listLevels, isBackendReady, likeLevel, requestApproval, listMyLevels, deleteOwnLevel, reportLevel } from './supabase-client.js';
+import { listLevels, isBackendReady, likeLevel, getMyLikedLevelIds, requestApproval, listMyLevels, deleteOwnLevel, reportLevel } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { LOCAL_PREFIX, listLocalDrafts, deleteLocalDraft } from './local-storage.js';
 import { showToast, confirmModal, promptModal } from './ui-kit.js';
@@ -13,6 +13,7 @@ const myLevelsHint = document.getElementById('my-levels-hint');
 const accountBar = document.getElementById('account-bar');
 
 let currentSession = null;
+let likedLevelIds = new Set(); // level ids the signed-in account has already liked (one like per account)
 
 function escapeHtml(s) {
   return (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -20,10 +21,20 @@ function escapeHtml(s) {
 
 function levelRow(lvl) {
   const approvalNote = lvl.approval_requested && !lvl.approved ? '<div class="muted" style="font-size:11px;">Approbation demandée…</div>' : '';
-  // Reporting is only possible for official (admin-approved) levels.
+  // Reporting is only possible for official (admin-approved) levels — but
+  // open to everyone (any signed-in account), not just the level's creator.
   const reportBtn = lvl.approved
     ? `<button class="btn small" data-report="${lvl.id}">🚩 Signaler</button>`
     : '';
+  // Only the level's own creator can request its approval — never anyone else.
+  const isOwner = !!(currentSession && lvl.owner_id === currentSession.user.id);
+  const approvalBtn = (!lvl.approved && isOwner)
+    ? `<button class="btn small" data-request-approval="${lvl.id}" ${lvl.approval_requested ? 'disabled' : ''}>${lvl.approval_requested ? 'Demande envoyée' : 'Demander l’approbation'}</button>`
+    : '';
+  // A like is capped at one per account — once liked, the button just shows
+  // that instead of allowing another click.
+  const alreadyLiked = likedLevelIds.has(lvl.id);
+  const likeBtn = `<button class="btn small" data-like="${lvl.id}" ${alreadyLiked ? 'disabled' : ''}>${alreadyLiked ? '❤ Déjà liké' : '❤ Liker'}</button>`;
   return `
     <div class="level-card${lvl.approved ? ' official' : ''}" data-id="${lvl.id}">
       <div class="lc-title">${escapeHtml(lvl.title)}${lvl.approved ? ' <span class="pill" title="Partie officielle">🏅 officiel</span>' : ''}</div>
@@ -36,8 +47,8 @@ function levelRow(lvl) {
       ${approvalNote}
       <div class="lc-actions">
         <a class="btn small accent" href="game.html?id=${lvl.id}">▶ Jouer</a>
-        <button class="btn small" data-like="${lvl.id}">❤ Liker</button>
-        ${!lvl.approved ? `<button class="btn small" data-request-approval="${lvl.id}" ${lvl.approval_requested ? 'disabled' : ''}>${lvl.approval_requested ? 'Demande envoyée' : 'Demander l’approbation'}</button>` : ''}
+        ${likeBtn}
+        ${approvalBtn}
         ${reportBtn}
       </div>
     </div>`;
@@ -46,8 +57,10 @@ function levelRow(lvl) {
 function bindRowActions(container) {
   container.querySelectorAll('button[data-like]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      if (!currentSession) { showToast('Connecte-toi pour liker un niveau.', { type: 'error' }); return; }
       btn.disabled = true;
-      await likeLevel(btn.dataset.like);
+      const { error, liked } = await likeLevel(btn.dataset.like);
+      if (!error && liked) likedLevelIds.add(btn.dataset.like);
       refreshAll();
     });
   });
@@ -79,6 +92,15 @@ function emptyState(msg) {
   return `<div class="level-empty">${msg}</div>`;
 }
 
+// Fetches (and merges into the module-level set) which of these level ids
+// the signed-in account has already liked, so levelRow() can grey out the
+// like button for them. A no-op (empty set) while signed out.
+async function loadLikedState(levels) {
+  if (!currentSession || !levels.length) return;
+  const liked = await getMyLikedLevelIds(levels.map((l) => l.id));
+  liked.forEach((id) => likedLevelIds.add(id));
+}
+
 async function refreshOfficial() {
   const ready = await isBackendReady();
   if (!ready) {
@@ -88,6 +110,7 @@ async function refreshOfficial() {
   const { levels, error } = await listLevels({ officialOnly: true, limit: 20 });
   if (error) { officialListEl.innerHTML = emptyState('Erreur de chargement.'); return; }
   if (!levels.length) { officialListEl.innerHTML = emptyState('Aucune partie officielle pour l\'instant.'); return; }
+  await loadLikedState(levels);
   officialListEl.innerHTML = levels.map(levelRow).join('');
   bindRowActions(officialListEl);
 }
@@ -109,6 +132,7 @@ async function refreshLevels(search = '') {
     listEl.innerHTML = emptyState('Aucun niveau publié pour l\'instant. Sois le premier !');
     return;
   }
+  await loadLikedState(levels);
   listEl.innerHTML = levels.map(levelRow).join('');
   bindRowActions(listEl);
 }
@@ -191,7 +215,7 @@ function refreshAll() {
 }
 
 searchInput.addEventListener('input', () => refreshLevels(searchInput.value));
-mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; refreshMyLevels(); } });
+mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; likedLevelIds = new Set(); refreshAll(); } });
 refreshOfficial();
 refreshLevels();
 refreshLocalDrafts();

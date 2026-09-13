@@ -30,6 +30,7 @@ const PALETTE = [
   { type: ENTITY_TYPES.TRIGGER, label: 'Zone de trigger (invisible)', color: '#f4d35e', icon: '👁️' },
   { type: ENTITY_TYPES.BUTTON, label: 'Bouton (visible, répétable)', color: '#06d6a0', icon: '🔘' },
   { type: ENTITY_TYPES.PLATE, label: 'Plaque de pression', color: '#c98a2b', icon: '🟫' },
+  { type: ENTITY_TYPES.CRATE, label: 'Cube poussable', color: '#8a5a34', icon: '📦' },
 ];
 
 const ACTION_LABELS = {
@@ -58,6 +59,8 @@ let playtesting = false;
 let testEngine = null;
 let session = null;       // current Supabase Auth session, kept in sync via onAuthChange
 let editingRemoteId = null; // set when this editor session is editing an already-published level
+let previewMode = false;  // read-only admin preview: full editor view, nothing can be changed/saved
+let showCoordOverlay = false; // true while a "Téléporter un élément" action's x/y field has focus
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -84,7 +87,23 @@ async function init() {
   const localKey = params.get('local');
   const wantDemo = params.get('demo') === '1';
   const editId = params.get('edit');
-  if (editId) {
+  const previewId = params.get('preview');
+  if (previewId) {
+    // Admin-only read-only preview (reported / pending-approval / official
+    // levels): reuses the exact same full editor rendering — invisible/
+    // passable entities revealed, every mechanic visible — so an admin sees
+    // everything a player wouldn't. Loading works just like `edit=`, but
+    // nothing here is ever wired up to save.
+    try {
+      const { level: remoteLevel } = await getLevel(previewId);
+      level = remoteLevel;
+      level.localKey = null;
+      previewMode = true;
+    } catch {
+      setStatus("Impossible de charger ce niveau pour l'aperçu.", true);
+      level = createEmptyLevel();
+    }
+  } else if (editId) {
     try {
       const { level: remoteLevel } = await getLevel(editId);
       level = remoteLevel;
@@ -115,6 +134,7 @@ async function init() {
   bindCanvas();
   mountKeybindButton(document.getElementById('keybind-bar'));
   mountAudioButton(document.getElementById('audio-bar'));
+  if (previewMode) applyPreviewModeUI();
 
   const accountBar = document.getElementById('account-bar');
   if (accountBar) {
@@ -169,6 +189,24 @@ function resizeCanvas() {
   canvas.height = level.rows * CELL;
 }
 
+// Locks the editor into a pure viewer: no placing/moving/erasing entities,
+// no publishing/saving/importing, palette hidden (nothing to place). Used
+// for the admin panel's "Aperçu" links on reported/pending/official levels
+// so an admin sees the exact same full-detail view a level's own author
+// gets in the editor (invisible/passable entities revealed, etc.) without
+// any risk of accidentally overwriting the level.
+function applyPreviewModeUI() {
+  const banner = document.getElementById('preview-banner');
+  if (banner) banner.classList.remove('hidden');
+  if (toolboxEl) toolboxEl.style.display = 'none';
+  tool = 'select';
+  ['new-level', 'load-demo', 'save-local', 'export-json', 'publish-btn', 'level-settings-btn']
+    .forEach((id) => { const el = document.getElementById(id); if (el) el.disabled = true; });
+  const importInput = document.getElementById('import-json');
+  if (importInput) { importInput.disabled = true; importInput.closest('label')?.classList.add('hidden'); }
+  titleInput.readOnly = true;
+}
+
 // Small glanceable summary on the "🌍 Condition du monde" toolbar button, so
 // the grid size (and any non-default gravity) is visible without opening the
 // settings panel.
@@ -213,6 +251,7 @@ function render() {
 
   for (const ent of level.entities) drawEntity(ent);
   drawTriggerLinks();
+  if (showCoordOverlay) drawCoordOverlay();
 
   // player start marker
   const ps = level.playerStart;
@@ -268,6 +307,23 @@ function drawTriggerLinks() {
   ctx.restore();
 }
 
+// Labels every cell with its (x, y) grid coordinate — shown only while
+// editing a "Téléporter un élément" action's x/y fields, so you can read off
+// the exact coordinates to type in instead of guessing/counting cells.
+function drawCoordOverlay() {
+  ctx.save();
+  ctx.font = '9px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  for (let cy = 0; cy < level.rows; cy++) {
+    for (let cx = 0; cx < level.cols; cx++) {
+      ctx.fillText(`${cx},${cy}`, cx * CELL + CELL / 2, cy * CELL + CELL / 2);
+    }
+  }
+  ctx.restore();
+}
+
 function hasActionListType(type) {
   return type === ENTITY_TYPES.TRIGGER || type === ENTITY_TYPES.BUTTON || type === ENTITY_TYPES.PLATE;
 }
@@ -294,6 +350,14 @@ function drawEntity(ent) {
       } else {
         ctx.fillStyle = (ent.props && ent.props.color) || '#2d6cdf'; ctx.fillRect(x, y, w, h);
       }
+      break;
+    case ENTITY_TYPES.CRATE:
+      ctx.fillStyle = '#8a5a34'; ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = '#5c3a1e'; ctx.lineWidth = 2; ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+      ctx.beginPath();
+      ctx.moveTo(x + 4, y + 4); ctx.lineTo(x + w - 4, y + h - 4);
+      ctx.moveTo(x + w - 4, y + 4); ctx.lineTo(x + 4, y + h - 4);
+      ctx.stroke();
       break;
     case ENTITY_TYPES.SPIKE: {
       ctx.fillStyle = ent.harmless ? '#5b6b7a' : '#e63946';
@@ -412,8 +476,23 @@ function entityAt(cx, cy) {
 }
 
 function handleCellClick(cx, cy) {
+  if (previewMode) {
+    // View-only: clicking only ever selects (to inspect props), never
+    // moves/places/erases anything.
+    const clicked = entityAt(cx, cy);
+    selectedId = clicked ? clicked.id : (cx === level.playerStart.x && cy === level.playerStart.y ? 'playerstart' : null);
+    render(); renderProps();
+    return;
+  }
   if (pickingTargetFor) {
     const ent = entityAt(cx, cy);
+    // A crate is a physics object, not a scriptable "element" — it can never
+    // be an action's target, so clicking one while picking just does nothing
+    // (stays in picking mode instead of clearing the target to "aucune").
+    if (ent && ent.type === ENTITY_TYPES.CRATE) {
+      setStatus("Un cube poussable n'est pas une cible valide pour une action.", true);
+      return;
+    }
     pickingTargetFor.onPick(ent ? ent.id : null);
     pickingTargetFor = null;
     pickBanner.classList.add('hidden');
@@ -487,6 +566,10 @@ function fieldGroup(title, bodyHtml) {
 }
 
 function renderProps() {
+  // Rebuilding the panel destroys whatever had focus, so drop the coordinate
+  // overlay too — it comes back the moment a teleport x/y field is focused
+  // again (see bindActionRow).
+  if (showCoordOverlay) { showCoordOverlay = false; render(); }
   if (!selectedId) {
     propsEl.innerHTML = '<h3 style="margin-top:0;">Propriétés</h3><p class="muted">Sélectionne un élément sur la grille (outil « Sélection ») pour l\'éditer.</p>';
     return;
@@ -581,6 +664,12 @@ function renderProps() {
 
   propsEl.innerHTML = html.join('');
   bindPropsInputs(ent);
+  if (previewMode) {
+    // Bindings above still get attached (harmless — they'd just mutate an
+    // in-memory level nothing ever saves), but disable every control so
+    // there's nothing to accidentally click/type into in the first place.
+    propsEl.querySelectorAll('input, select, button, textarea').forEach((el) => { el.disabled = true; });
+  }
 }
 
 function renderPlayerStartProps() {
@@ -608,6 +697,7 @@ function renderPlayerStartProps() {
   if (gravSel) gravSel.addEventListener('change', () => { ps.gravityDir = gravSel.value; });
   const invChk = document.getElementById('p-ps-invisible');
   if (invChk) invChk.addEventListener('change', () => { ps.invisible = invChk.checked; render(); });
+  if (previewMode) propsEl.querySelectorAll('input, select, button, textarea').forEach((el) => { el.disabled = true; });
 }
 
 function teleporterGroupCount(freq, excludeId) {
@@ -686,6 +776,8 @@ function bindPropsInputs(ent) {
   // trigger/button/plate-specific bindings
   const loopChk = document.getElementById('p-loop');
   if (loopChk) loopChk.addEventListener('change', () => { ent.props.loop = loopChk.checked; render(); renderProps(); });
+  const reversibleChk = document.getElementById('p-reversible');
+  if (reversibleChk) reversibleChk.addEventListener('change', () => { ent.props.reversible = reversibleChk.checked; render(); renderProps(); });
   const addActionBtn = document.getElementById('add-action');
   if (addActionBtn) addActionBtn.addEventListener('click', () => {
     ent.props.actions.push(createAction(ACTION_TYPES.MOVE_ELEMENT, { params: defaultParamsFor(ACTION_TYPES.MOVE_ELEMENT) }));
@@ -702,10 +794,12 @@ function renderLoopCheckbox(ent) {
 }
 
 // Shared shape for TRIGGER/BUTTON/PLATE: a titled card explaining how it
-// fires, the loop checkbox, then its list of actions with an "add" button.
-function renderActionListEditor(title, hintHtml, actionsLabel, ent) {
+// fires, an optional extra toggle (e.g. "reversible" for button/plate), the
+// loop checkbox, then its list of actions with an "add" button.
+function renderActionListEditor(title, hintHtml, actionsLabel, ent, extraHtml = '') {
   const body = `
     <p class="hint" style="margin-top:0;">${hintHtml}</p>
+    ${extraHtml}
     ${renderLoopCheckbox(ent)}
     <label style="margin-top:14px;">${actionsLabel}</label>
     <div id="actions-list">${(ent.props.actions || []).map((a) => renderActionRow(ent, a)).join('')}</div>
@@ -717,16 +811,25 @@ function renderTriggerEditor(ent) {
   return renderActionListEditor('Trigger', 'Se déclenche dès que le joueur entre dans la zone.', 'Actions déclenchées', ent);
 }
 
+// Both button and plate can optionally alternate forward/reverse on
+// successive activations — but only when "Inversement" is explicitly turned
+// on. By default they always play their actions forward, every time.
+function renderReversibleCheckbox(ent) {
+  return `<label class="toggle-row" style="margin-top:8px;"><input type="checkbox" id="p-reversible" ${ent.props.reversible ? 'checked' : ''} />Inversement des actions (alterne : aller, puis retour, à chaque activation)</label>`;
+}
+
 function renderButtonEditor(ent) {
-  return renderActionListEditor('Bouton',
-    'À chaque pression, le bouton alterne : il joue les actions, puis au clic suivant il les rejoue à l\'envers (retour à l\'état initial), et ainsi de suite. Sans effet si « Boucle infinie » est cochée.',
-    'Actions déclenchées à chaque pression', ent);
+  const hint = ent.props.reversible
+    ? 'À chaque pression, le bouton alterne : il joue les actions, puis au clic suivant il les rejoue à l\'envers (retour à l\'état initial), et ainsi de suite. Sans effet si « Boucle infinie » est cochée.'
+    : 'À chaque pression, le bouton rejoue ses actions depuis le début (toujours dans le même sens). Active « Inversement des actions » ci-dessous pour qu\'il alterne aller/retour à chaque pression.';
+  return renderActionListEditor('Bouton', hint, 'Actions déclenchées à chaque pression', ent, renderReversibleCheckbox(ent));
 }
 
 function renderPlateEditor(ent) {
-  return renderActionListEditor('Plaque de pression',
-    'Tant que le joueur reste dessus, les actions se répètent automatiquement (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus.',
-    'Actions déclenchées', ent);
+  const hint = ent.props.reversible
+    ? 'Tant que le joueur reste dessus, les actions se répètent automatiquement en alternant aller/retour à chaque cycle (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus.'
+    : 'Tant que le joueur reste dessus, les actions se répètent automatiquement dans le même sens (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus. Active « Inversement des actions » ci-dessous pour alterner aller/retour à chaque cycle.';
+  return renderActionListEditor('Plaque de pression', hint, 'Actions déclenchées', ent, renderReversibleCheckbox(ent));
 }
 
 function defaultParamsFor(type) {
@@ -851,9 +954,10 @@ function renderActionRow(ent, action) {
       break;
     case ACTION_TYPES.TELEPORT:
       fields = `<div class="row">
-          <div><label>x (case)</label><input type="number" data-f="x" value="${p.x ?? 0}" /></div>
-          <div><label>y (case)</label><input type="number" data-f="y" value="${p.y ?? 0}" /></div>
-        </div>`;
+          <div><label>x (case)</label><input type="number" data-f="x" class="teleport-coord-input" value="${p.x ?? 0}" /></div>
+          <div><label>y (case)</label><input type="number" data-f="y" class="teleport-coord-input" value="${p.y ?? 0}" /></div>
+        </div>
+        <p class="hint" style="margin-top:2px;">Astuce : clique dans un des deux champs ci-dessus pour afficher les coordonnées (x,y) de chaque case sur la grille.</p>`;
       break;
     case ACTION_TYPES.SET_STATE:
       fields = `<label>Nouvel état de la cible</label><div class="toggle-list">
@@ -912,6 +1016,10 @@ function bindActionRow(ent, action) {
       render();
     };
     el.addEventListener('change', handler);
+  });
+  row.querySelectorAll('.teleport-coord-input').forEach((el) => {
+    el.addEventListener('focus', () => { showCoordOverlay = true; render(); });
+    el.addEventListener('blur', () => { showCoordOverlay = false; render(); });
   });
   bindOptionalFields(action, row);
   const removeBtn = row.querySelector('[data-remove-action]');

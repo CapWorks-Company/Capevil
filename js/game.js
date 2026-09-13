@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import { buildSampleLevel } from './sample-level.js';
 import { deserializeLevel } from './level-model.js';
-import { getLevel, recordPlay, recordWin, likeLevel, reportLevel, isBackendReady } from './supabase-client.js';
+import { getLevel, recordPlay, recordWin, likeLevel, hasLikedLevel, reportLevel, isBackendReady } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
 import { showToast, promptModal } from './ui-kit.js';
@@ -36,7 +36,17 @@ const localKey = params.get('local');
 let engine = null;
 let session = null;
 
-isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; } }); });
+isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; refreshLikeButtonState(); } }); });
+
+// A like is capped at one per account — grey the button out (without
+// touching the count span inside it) once this account has already liked
+// the level currently loaded.
+async function refreshLikeButtonState() {
+  if (!remoteId) return;
+  const liked = await hasLikedLevel(remoteId);
+  likeBtn.disabled = liked;
+  likeBtn.title = liked ? 'Tu as déjà liké ce niveau.' : '';
+}
 mountKeybindButton(document.getElementById('keybind-bar'));
 mountAudioButton(document.getElementById('audio-bar'));
 
@@ -47,6 +57,7 @@ async function loadLevel() {
       recordPlay(remoteId);
       likeCountEl.textContent = likes ?? 0;
       likeBtn.classList.remove('hidden');
+      refreshLikeButtonState();
       if (approved) { officialBadge.classList.remove('hidden'); reportBtn.classList.remove('hidden'); }
       return level;
     } catch (err) {
@@ -64,10 +75,11 @@ async function loadLevel() {
 
 likeBtn.addEventListener('click', async () => {
   if (!remoteId) return;
+  if (!session) { showToast('Connecte-toi (en haut) pour liker ce niveau.', { type: 'error' }); return; }
   likeBtn.disabled = true;
-  const { error } = await likeLevel(remoteId);
-  if (!error) likeCountEl.textContent = String(parseInt(likeCountEl.textContent, 10) + 1);
-  likeBtn.disabled = false;
+  const { error, liked } = await likeLevel(remoteId);
+  if (!error && liked) likeCountEl.textContent = String(parseInt(likeCountEl.textContent, 10) + 1);
+  await refreshLikeButtonState(); // stays disabled once liked; re-enables only on a genuine failure
 });
 
 reportBtn.addEventListener('click', async () => {

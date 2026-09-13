@@ -109,6 +109,8 @@ export class Engine {
         // (fan only) fixed-rate ambient/push wind-particle emitters — see _applyFans
         windAccum: 0,
         pushWindAccum: 0,
+        // (crate only) vertical fall velocity — see _updateCrates
+        vy: 0,
       });
     }
   }
@@ -151,6 +153,7 @@ export class Engine {
       rt.wasOverlapping = false; rt.usedOnce = false;
       rt.looping = false; rt.holding = false; rt.buttonReady = true; rt.awaitingReset = false; rt.reversed = false;
       rt.closing = false; rt.closeStart = 0; rt.doorProgress = 0;
+      rt.vy = 0;
       if (def.type !== ENTITY_TYPES.CHECKPOINT) rt.activated = false;
     }
   }
@@ -254,6 +257,7 @@ export class Engine {
     // no more input/physics/triggers — while the door finishes closing.
     if (!this.finishing) {
       this._applyFans(dt);
+      this._updateCrates(dt);
       this._updatePhysics(dt);
       this._checkTriggers();
       this._checkButtons();
@@ -392,6 +396,82 @@ export class Engine {
     return rects;
   }
 
+  // Crates are pushable physics cubes, not scriptable "elements" (no
+  // action-targeting, no toggles) — they just fall with gravity and can be
+  // shoved sideways by the player. Runs BEFORE _updatePhysics each frame so
+  // a crate that fell (or was left mid-air after a solid moved away) settles
+  // before the player's own collision is resolved against it this same
+  // frame. Crates are already in SOLID_TYPES, so the player-vs-crate side of
+  // this (walking into one, standing on one) is handled for free by the
+  // existing generic solid-collision code — this method only has to give
+  // the crate its own falling motion.
+  _updateCrates(dt) {
+    const gravityScale = Number.isFinite(this.level.gravityScale) ? this.level.gravityScale : 1;
+    const maxFall = PHYSICS.MAX_FALL_SPEED * gravityScale;
+    const solids = this._solidRects(); // snapshot once — good enough for one frame of crate-vs-crate stacking
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.CRATE || rt.passable) continue;
+      rt.vy = (rt.vy || 0) + PHYSICS.GRAVITY_ACCEL * gravityScale * dt;
+      if (rt.vy > maxFall) rt.vy = maxFall;
+      rt.y += rt.vy * dt;
+      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      for (const r of solids) {
+        if (r.id === rt.def.id) continue; // never collide with itself
+        if (!this._overlap(box, r)) continue;
+        if (rt.vy > 0) rt.y = r.y - box.h;
+        else if (rt.vy < 0) rt.y = r.y + r.h;
+        rt.vy = 0;
+        box.y = rt.y;
+      }
+      // out-of-bounds crates (pushed off an edge into the void) just stop
+      // falling once well past the level — no need to keep integrating forever
+      if (rt.y > this.level.rows * CELL + CELL * 4) rt.vy = 0;
+    }
+  }
+
+  // Lets the player shove a crate sideways by walking into it. Called right
+  // after the player's tentative (pre-collision) x-move for this frame, so
+  // `p.x` already reflects where they're trying to go. A crate the player is
+  // (now) overlapping gets shifted the same direction by exactly the
+  // penetration depth — enough to stay flush with no overlap, so it keeps
+  // moving in lockstep with the player for as long as they keep walking into
+  // it. If the crate has no room (another solid/crate in the way, or the
+  // grid edge), it doesn't move, and the caller's normal solid-collision
+  // resolution (against the crate's unchanged position) blocks the player
+  // exactly like walking into a block. A crate resting on top of the player
+  // (or vice versa) never triggers this — touching flush along y, not
+  // overlapping, is exactly what `_overlap` treats as "no collision".
+  _pushCrates() {
+    const p = this.player;
+    if (p.vx === 0) return;
+    const pushDir = p.vx > 0 ? 1 : -1;
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.CRATE || rt.passable) continue;
+      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      if (!this._overlap(p, box)) continue;
+      const penetration = pushDir > 0 ? (p.x + p.w - box.x) : (box.x + box.w - p.x);
+      if (penetration <= 0) continue;
+      const newX = rt.x + pushDir * penetration;
+      if (newX < 0 || newX + box.w > this.level.cols * CELL) continue; // grid edge blocks it
+      const testBox = { x: newX, y: rt.y, w: box.w, h: box.h };
+      const blocked = this._solidRects().some((r) => r.id !== rt.def.id && this._overlap(testBox, r));
+      if (blocked) continue;
+      rt.x = newX;
+    }
+  }
+
+  // Whether any crate currently overlaps the given box — used by
+  // _checkPlates so a crate sitting on a pressure plate weighs it down
+  // exactly like the player standing on it would.
+  _crateOverlapping(box) {
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.CRATE || rt.passable) continue;
+      const cbox = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      if (this._overlap(cbox, box)) return true;
+    }
+    return false;
+  }
+
   // Point on the player's boundary facing "down" relative to current
   // gravity — i.e. the feet — used to anchor cosmetic dust particles so they
   // land under the player regardless of which wall gravity currently treats
@@ -452,10 +532,12 @@ export class Engine {
     }
 
     // integrate + resolve collisions on each axis separately
-    const rects = this._solidRects();
+    let rects = this._solidRects();
     p.onGround = false;
 
     p.x += p.vx * dt;
+    this._pushCrates(); // may shove a crate out of the way before x-collision resolves
+    rects = this._solidRects(); // re-snapshot: a pushed crate's rect must reflect its new position
     this._resolveAxis(p, rects, 'x', g);
     p.y += p.vy * dt;
     this._resolveAxis(p, rects, 'y', g);
@@ -618,12 +700,14 @@ export class Engine {
 
   // A button is a visible, physical switch: pressing it fires its actions;
   // it becomes pressable again as soon as those actions finish playing (no
-  // fixed cooldown to configure). Every press alternates between playing its
-  // actions forward and playing them undone — "comme si on inversait le sens
-  // du temps" — via _fireTrigger's built-in forward/reverse toggle (see
-  // below), so a second press naturally puts everything back the way it
-  // was. "Boucle infinie" instead turns one press into a self-repeating
-  // cycle forever (each cycle of the loop also alternates the same way).
+  // fixed cooldown to configure). By default every press replays the same
+  // actions forward. If "Inversement des actions" is turned on, presses
+  // instead alternate between playing the actions forward and playing them
+  // undone — "comme si on inversait le sens du temps" — via _fireTrigger's
+  // built-in forward/reverse toggle (see below), so a second press naturally
+  // puts everything back the way it was. "Boucle infinie" instead turns one
+  // press into a self-repeating cycle forever (each cycle of the loop also
+  // alternates the same way, when reversible is on).
   _checkButtons() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
@@ -648,15 +732,16 @@ export class Engine {
 
   // A pressure plate repeats its actions for as long as the player stays on
   // it (one cycle right away, then again every time the previous cycle
-  // finishes — alternating forward/reverse each cycle, same as a button),
-  // stopping the moment they step off — unless "boucle infinie" is set, in
-  // which case one press starts a cycle that never stops.
+  // finishes — forward every time by default, or alternating forward/reverse
+  // each cycle when "Inversement des actions" is on, same opt-in as a
+  // button), stopping the moment they step off — unless "boucle infinie" is
+  // set, in which case one press starts a cycle that never stops.
   _checkPlates() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.PLATE) continue;
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
-      const overlapping = this._overlap(p, box);
+      const overlapping = this._overlap(p, box) || this._crateOverlapping(box);
       if (overlapping && !rt.wasOverlapping) {
         if (rt.def.props && rt.def.props.loop) this._fireLoop(rt);
         else this._startHold(rt);
@@ -711,20 +796,24 @@ export class Engine {
     return this.simTime + this._actionsSpan(rt);
   }
 
-  // TRIGGER always plays its actions forward. BUTTON and PLATE instead
-  // alternate every time they fire: 1st activation forward, 2nd activation
-  // undone ("comme si on inversait le sens du temps" — a moved element goes
-  // back to its start, an invisible player becomes visible again, etc — see
+  // TRIGGER always plays its actions forward. BUTTON and PLATE can
+  // optionally do the same alternating trick, but only when "Inversement
+  // des actions" is explicitly turned on for that entity (props.reversible)
+  // — by default they always play forward, every time, just like a trigger.
+  // When enabled: 1st activation forward, 2nd activation undone ("comme si
+  // on inversait le sens du temps" — a moved element goes back to its
+  // start, an invisible player becomes visible again, etc — see
   // _runActionReversed), 3rd forward again, and so on.
   _fireTrigger(triggerRt) {
-    const isReversible = triggerRt.def.type === ENTITY_TYPES.BUTTON || triggerRt.def.type === ENTITY_TYPES.PLATE;
-    const reversed = isReversible && triggerRt.reversed;
+    const canReverse = (triggerRt.def.type === ENTITY_TYPES.BUTTON || triggerRt.def.type === ENTITY_TYPES.PLATE)
+      && !!(triggerRt.def.props && triggerRt.def.props.reversible);
+    const reversed = canReverse && triggerRt.reversed;
     const actions = (triggerRt.def.props && triggerRt.def.props.actions) || [];
     for (const action of actions) {
       const runAt = this.simTime + (action.delay || 0);
       this.scheduled.push({ time: runAt, run: () => (reversed ? this._runActionReversed(action) : this._runAction(action)) });
     }
-    if (isReversible) triggerRt.reversed = !triggerRt.reversed;
+    if (canReverse) triggerRt.reversed = !triggerRt.reversed;
   }
 
   _runAction(action) {
@@ -1017,6 +1106,21 @@ export class Engine {
           ctx.strokeStyle = 'rgba(0,0,0,0.2)';
           for (let i = 1; i < rt.def.w; i++) { ctx.beginPath(); ctx.moveTo(rt.x + i * CELL, rt.y + 2); ctx.lineTo(rt.x + i * CELL, rt.y + h - 2); ctx.stroke(); }
         }
+        break;
+      }
+      case ENTITY_TYPES.CRATE: {
+        // A simple wooden crate: flat fill, a beveled edge, and a diagonal
+        // "X" cross-brace so it reads as a pushable box at a glance (and
+        // never gets mistaken for a static BLOCK, even camouflaged ones).
+        ctx.fillStyle = '#8a5a34'; ctx.fillRect(rt.x, rt.y, w, h);
+        ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(rt.x, rt.y, w, 3);
+        ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.fillRect(rt.x, rt.y + h - 3, w, 3);
+        ctx.strokeStyle = '#5c3a1e'; ctx.lineWidth = 2;
+        ctx.strokeRect(rt.x + 2, rt.y + 2, w - 4, h - 4);
+        ctx.beginPath();
+        ctx.moveTo(rt.x + 4, rt.y + 4); ctx.lineTo(rt.x + w - 4, rt.y + h - 4);
+        ctx.moveTo(rt.x + w - 4, rt.y + 4); ctx.lineTo(rt.x + 4, rt.y + h - 4);
+        ctx.stroke();
         break;
       }
       case ENTITY_TYPES.SPIKE: {

@@ -22,15 +22,30 @@ de vrais blocs), une **plaque de pression** (répète ses actions tant que le
 joueur reste dessus) et des **triggers** invisibles (se déclenchent en
 entrant dans leur zone). L'arrivée est elle aussi **traversable** en option
 (on la franchit alors sans gagner, comme un pur décor). Les **boutons** et
-**plaques** sont
-tous les deux **réversibles** : chaque pression rejoue leurs actions, et la
-pression suivante les rejoue automatiquement à l'envers (un élément déplacé
-revient à son point de départ, un joueur rendu invisible redevient visible,
-etc.) — « comme si on inversait le sens du temps », sans aucun réglage à
-faire. Trigger, bouton et plaque peuvent tous les trois être mis en
-**boucle infinie**. Une mort remet tout le niveau à zéro (triggers,
-positions, états) sauf le dernier checkpoint atteint, dont le drapeau garde
-toujours la même taille.
+**plaques** peuvent en option être rendus **« inversables »** (case à cocher
+« Inversement des actions », désactivée par défaut) : une fois activée,
+chaque pression rejoue leurs actions, et la pression suivante les rejoue
+automatiquement à l'envers (un élément déplacé revient à son point de
+départ, un joueur rendu invisible redevient visible, etc.) — « comme si on
+inversait le sens du temps ». Par défaut (case décochée), un bouton/plaque
+rejoue toujours ses actions dans le même sens, à chaque pression. Trigger,
+bouton et plaque peuvent tous les trois être mis en **boucle infinie**. Une
+mort remet tout le niveau à zéro (triggers, positions, états) sauf le
+dernier checkpoint atteint, dont le drapeau garde toujours la même taille.
+
+Un **cube poussable** (📦) est un objet physique (pas un élément
+scriptable — il ne peut jamais être la cible d'une action) : il tombe avec
+la gravité, se pose sur les blocs/plateformes/autres cubes comme n'importe
+quel solide, et le joueur peut le pousser latéralement simplement en
+marchant dedans (bloqué net s'il n'y a pas la place). Un cube posé sur une
+**plaque de pression** l'actionne exactement comme le ferait le joueur — de
+quoi bâtir des casse-têtes de poids/pression sans avoir besoin du joueur
+lui-même sur la plaque.
+
+Pendant l'édition d'une action **« Téléporter un élément »**, cliquer dans
+l'un des champs x/y affiche les coordonnées **(x, y) de chaque case** de la
+grille en surimpression, pour repérer précisément où téléporter sans avoir à
+compter les cases à l'œil.
 
 Chaque trigger/bouton/plaque déclenche une liste d'actions parmi exactement
 cinq types : **déplacer un élément** (Axe X : +1 droite / -1 gauche, Axe Y :
@@ -70,9 +85,17 @@ bien distinctes** (état, réglages spécifiques à l'élément, actions…) plu
 qu'une longue liste plate de champs, des **comptes joueurs** (Supabase
 Auth, via une **fenêtre modale** de connexion/inscription) pour publier
 sous son vrai nom et gérer (modifier/supprimer) ses propres niveaux, un
-système de **likes**, une file de **demandes d'approbation** avec un espace
-**admin** pour promouvoir des niveaux en « Parties officielles », et un
-**signalement** réservé à ces niveaux officiels. Les touches
+système de **likes** limité à **un like par compte et par niveau** (le
+bouton se grise définitivement une fois liké), une **demande d'approbation**
+réservée au **créateur du niveau** (seul son propre auteur peut demander sa
+mise en avant), un **espace admin** pour promouvoir des niveaux en « Parties
+officielles », et un **signalement** ouvert à **tout le monde** (pas
+seulement le créateur) mais réservé aux niveaux déjà officiels. Dans le
+panneau admin, chaque niveau en attente d'approbation, signalé, ou déjà
+officiel a un lien **« 👁️ Aperçu complet »** qui ouvre l'éditeur en mode
+lecture seule (rien n'est modifiable ni publiable) montrant tout exactement
+comme dans l'éditeur — y compris les éléments invisibles/traversables — au
+lieu de la simple vue de jeu normale. Les touches
 (gauche/droite/haut/bas/saut) sont **remappables** et sauvegardées dans le
 navigateur. Le site affiche un panneau plein écran invitant à revenir sur
 ordinateur pour toute visite mobile/tablette, car le jeu comme l'éditeur
@@ -100,7 +123,8 @@ authentification + API).
 index.html      → accueil : parties officielles + niveaux publiés + brouillons + mes niveaux
 game.html        → écran de jeu (?id=<uuid> pour un niveau publié,
                     ?local=<clé> pour un brouillon local, sinon niveau démo)
-editor.html      → éditeur de niveaux (?edit=<uuid> pour modifier un niveau publié)
+editor.html      → éditeur de niveaux (?edit=<uuid> pour modifier un niveau publié,
+                    ?preview=<uuid> pour l'aperçu admin en lecture seule)
 admin.html       → espace admin : approbation des niveaux + signalements
 js/engine.js      → moteur de jeu (physique, collisions, triggers/boutons, rendu, son/particules/tremblement)
 js/editor.js      → logique de l'éditeur
@@ -124,8 +148,10 @@ wrangler.toml     → config pour déployer sur un Cloudflare Worker
 
 1. Va sur [supabase.com](https://supabase.com) → ouvre ton projet (ou crées-en un).
 2. Dans **SQL Editor**, colle le contenu de `sql/schema.sql` et exécute-le.
-   Cela crée la table `levels`, les règles de sécurité (RLS) et la fonction
-   qui incrémente les statistiques (parties jouées / victoires).
+   Cela crée les tables `levels`, `reports` et `level_likes` (un like par
+   compte et par niveau, imposé par sa clé primaire composite), les règles
+   de sécurité (RLS) et les fonctions qui incrémentent les statistiques
+   (parties jouées / victoires / likes).
 3. Dans **Project Settings → API**, récupère :
    - **Project URL** (ex : `https://abcdefgh.supabase.co`)
    - **anon public key** (⚠️ pas la `service_role` key !)

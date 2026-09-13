@@ -14,10 +14,14 @@ export const ENTITY_TYPES = {
   TRIGGER: 'trigger',        // invisible zone, fires once per entry (or loops forever)
   BUTTON: 'button',          // visible pressable switch: fires on press, ready again once its actions finish
   PLATE: 'plate',            // visible pressure plate: repeats its actions for as long as the player stays on it
+  CRATE: 'crate',            // pushable physics cube: falls with gravity, player can push it, can weigh down plates
 };
 
 export const HAZARD_TYPES = new Set([ENTITY_TYPES.SPIKE, ENTITY_TYPES.SPINNER]);
-export const SOLID_TYPES = new Set([ENTITY_TYPES.BLOCK, ENTITY_TYPES.PLATFORM]);
+// Crates are solid too (the player walks into/stands on them exactly like a
+// block) — that's what lets them reuse the same generic solid-collision code
+// as every other solid, instead of needing their own player-collision logic.
+export const SOLID_TYPES = new Set([ENTITY_TYPES.BLOCK, ENTITY_TYPES.PLATFORM, ENTITY_TYPES.CRATE]);
 
 // Entity "state" used to be a single exclusive enum (normal/passable/invisible/
 // harmless). That made "invisible" behave like a ghost (unseen AND unable to
@@ -56,6 +60,10 @@ export function togglesForType(type) {
     case ENTITY_TYPES.PLATE:
       // A button/plate's whole point is to be a visible, physical switch, so
       // it's never hidden and never itself a hazard.
+      return [];
+    case ENTITY_TYPES.CRATE:
+      // A crate is a physics object, not a hazard/hideable decoration — none
+      // of the generic toggles apply to it.
       return [];
     default:
       return [];
