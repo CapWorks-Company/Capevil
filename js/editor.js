@@ -288,7 +288,13 @@ function drawEntity(ent) {
   if (ent.passable || ent.invisible) ctx.globalAlpha = 0.55;
   switch (ent.type) {
     case ENTITY_TYPES.BLOCK: ctx.fillStyle = '#111319'; ctx.fillRect(x, y, w, h); ctx.strokeStyle = '#3a3f52'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2); break;
-    case ENTITY_TYPES.PLATFORM: ctx.fillStyle = (ent.props && ent.props.color) || '#2d6cdf'; ctx.fillRect(x, y, w, h); break;
+    case ENTITY_TYPES.PLATFORM:
+      if (ent.props && ent.props.style === 'block') {
+        ctx.fillStyle = '#111319'; ctx.fillRect(x, y, w, h); ctx.strokeStyle = '#3a3f52'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      } else {
+        ctx.fillStyle = (ent.props && ent.props.color) || '#2d6cdf'; ctx.fillRect(x, y, w, h);
+      }
+      break;
     case ENTITY_TYPES.SPIKE: {
       ctx.fillStyle = ent.harmless ? '#5b6b7a' : '#e63946';
       const facing = ent.props.facing || 'up';
@@ -543,12 +549,18 @@ function renderProps() {
       <input type="number" id="p-speed" value="${ent.props.speed ?? 2}" step="0.1" min="0.1" max="10" />`));
   }
   if (ent.type === ENTITY_TYPES.PLATFORM) {
-    html.push(fieldGroup('Apparence', `
-      <label>Couleur (pour ressembler à un bloc solide)</label>
+    const style = ent.props.style === 'block' ? 'block' : 'color';
+    const colorRow = style === 'color' ? `
+      <label>Couleur</label>
       <div class="row" style="align-items:center;gap:8px;">
         <input type="color" id="p-color" value="${ent.props.color || '#2d6cdf'}" style="width:52px;height:32px;padding:2px;flex:none;" />
         <button class="btn small" id="p-color-reset" type="button">Couleur par défaut</button>
-      </div>`));
+      </div>` : `
+      <p class="hint" style="margin-top:0;">La plateforme est rendue exactement comme un bloc solide (même couleur, même style) — pratique pour la camoufler parmi de vrais blocs.</p>`;
+    html.push(fieldGroup('Apparence', `
+      <label>Style</label>
+      ${selectHtml('p-platform-style', { color: 'Couleur personnalisée', block: 'Bloc solide' }, style)}
+      ${colorRow}`));
   }
   if (ent.type === ENTITY_TYPES.TELEPORTER) {
     const freqLabels = {};
@@ -638,6 +650,8 @@ function bindPropsInputs(ent) {
   if (colorInput) colorInput.addEventListener('input', () => { ent.props.color = colorInput.value; render(); });
   const colorResetBtn = document.getElementById('p-color-reset');
   if (colorResetBtn) colorResetBtn.addEventListener('click', () => { ent.props.color = null; render(); renderProps(); });
+  const platformStyleSel = document.getElementById('p-platform-style');
+  if (platformStyleSel) platformStyleSel.addEventListener('change', () => { ent.props.style = platformStyleSel.value; render(); renderProps(); });
 
   const freqSel = document.getElementById('p-freq');
   if (freqSel) freqSel.addEventListener('change', () => {

@@ -1,20 +1,28 @@
 # Level Devil — jeu + éditeur + niveaux communautaires
 
 Un jeu de plateforme façon **Level Devil** : blocs (posés case par case et
-assemblés sans jointure visible, y compris à la verticale), pointes
-orientables et dont l'état peut aussi **changer leur rotation en jeu** («
-inoffensif » = on peut les toucher sans mourir, « traversable » = on les
-traverse carrément), ressorts (haut/bas), ventilateurs à **portée réglable**
-(nombre de cases touchées par l'air, avec une diminution optionnelle de la
-force selon la distance) qui, tant qu'ils sont visibles, soufflent en
-permanence des **particules de vent ambiantes** le long de tout leur
-couloir de poussée (plus ou moins denses selon leur puissance, pas
+assemblés sans jointure visible, y compris à la verticale) avec leurs
+propres bascules **traversable / invisible / tueur** (un bloc « tueur » tue
+le joueur au contact au lieu d'être un simple obstacle), pointes orientables
+et dont l'état peut aussi **changer leur rotation en jeu** (« inoffensif » =
+on peut les toucher sans mourir, « traversable » = on les traverse
+carrément), ressorts (haut/bas), ventilateurs à **portée réglable** (nombre
+de cases touchées par l'air, avec une diminution optionnelle de la force
+selon la distance) qui, tant qu'ils sont visibles, soufflent un flux
+**constant** de particules de vent le long de tout leur couloir de poussée
+(plus ou moins dense selon leur puissance, jamais par intermittence, et pas
 seulement quand le joueur les traverse), roues tournantes, téléporteurs
 liés par fréquence (le « sens unique » s'applique à toute la fréquence d'un
-coup, sans possibilité de faire demi-tour), plateformes mobiles
-personnalisables en couleur, une **plaque de pression** (répète ses actions
-tant que le joueur reste dessus) et des **triggers** invisibles (se
-déclenchent en entrant dans leur zone). Les **boutons** et **plaques** sont
+coup, sans possibilité de faire demi-tour), plateformes mobiles (même
+gabarit qu'un bloc solide par défaut, mais toujours librement
+redimensionnables, avec les mêmes bascules **traversable / invisible /
+tueur** que le bloc, et une **apparence au choix** : couleur personnalisée
+ou rendue à l'identique d'un bloc solide, pratique pour la camoufler parmi
+de vrais blocs), une **plaque de pression** (répète ses actions tant que le
+joueur reste dessus) et des **triggers** invisibles (se déclenchent en
+entrant dans leur zone). L'arrivée est elle aussi **traversable** en option
+(on la franchit alors sans gagner, comme un pur décor). Les **boutons** et
+**plaques** sont
 tous les deux **réversibles** : chaque pression rejoue leurs actions, et la
 pression suivante les rejoue automatiquement à l'envers (un élément déplacé
 revient à son point de départ, un joueur rendu invisible redevient visible,
@@ -29,8 +37,8 @@ cinq types : **déplacer un élément** (Axe X : +1 droite / -1 gauche, Axe Y :
 +1 monte / -1 descend — jamais le joueur, c'est le rôle du téléporteur),
 **téléporter un élément** (ou le joueur), **changer l'état du monde**
 (gravité, fond d'écran — jamais la taille de la grille), **changer l'état
-d'un élément** (traversable / invisible / inoffensif / **rotation**, pour
-faire pivoter des pointes par exemple) et **changer l'état du joueur**
+d'un élément** (traversable / invisible / inoffensif / tueur / **rotation**,
+pour faire pivoter des pointes par exemple) et **changer l'état du joueur**
 (gravité, touches inversées façon troll, visibilité, puissance de
 saut/déplacement). Ces changements d'état du joueur ont aussi un rendu
 soigné : la gravité inversée **retourne visuellement le joueur** dans le

@@ -88,7 +88,7 @@ export class Engine {
       this.runtime.set(ent.id, {
         def: ent,
         x: ent.x * CELL, y: ent.y * CELL,
-        passable: !!ent.passable, invisible: !!ent.invisible, harmless: !!ent.harmless,
+        passable: !!ent.passable, invisible: !!ent.invisible, harmless: !!ent.harmless, deadly: !!ent.deadly,
         facing: (ent.props && ent.props.facing) || 'up', // runtime-only so SET_STATE can rotate it without touching the authored def
         anim: null, // { fromX,fromY,toX,toY,startTime,duration }
         dx: 0, dy: 0, // this-frame movement delta, for carrying the player along
@@ -106,6 +106,9 @@ export class Engine {
         closing: false,
         closeStart: 0,
         doorProgress: 0,
+        // (fan only) fixed-rate ambient/push wind-particle emitters — see _applyFans
+        windAccum: 0,
+        pushWindAccum: 0,
       });
     }
   }
@@ -142,7 +145,7 @@ export class Engine {
     for (const rt of this.runtime.values()) {
       const def = rt.def;
       rt.x = def.x * CELL; rt.y = def.y * CELL;
-      rt.passable = !!def.passable; rt.invisible = !!def.invisible; rt.harmless = !!def.harmless;
+      rt.passable = !!def.passable; rt.invisible = !!def.invisible; rt.harmless = !!def.harmless; rt.deadly = !!def.deadly;
       rt.facing = (def.props && def.props.facing) || 'up';
       rt.anim = null; rt.dx = 0; rt.dy = 0; rt.angle = 0;
       rt.wasOverlapping = false; rt.usedOnce = false;
@@ -318,15 +321,20 @@ export class Engine {
       else if (v.y > 0) box.h += range * CELL;
       else if (v.y < 0) { box.y -= range * CELL; box.h += range * CELL; }
 
-      // Ambient wind: as long as the fan itself is visible, sprinkle a few
-      // particles drifting along its whole push corridor every frame —
-      // whether or not the player happens to be standing in it right now —
-      // so a fan visibly "blows" across the cells/blocks it affects instead
-      // of only showing an effect when something is being pushed. The rate
+      // Ambient wind: as long as the fan itself is visible, stream particles
+      // drifting along its whole push corridor continuously — whether or not
+      // the player happens to be standing in it right now — so a fan visibly
+      // "blows" across the cells/blocks it affects at all times instead of
+      // only showing an effect once in a while. This is a fixed-rate
+      // accumulator (not a per-frame dice roll), so the stream never goes
+      // quiet at low framerates or low `force` — it just spawns less often
+      // per particle, always at a steady cadence. The rate itself still
       // scales with `force` (power) so a stronger fan reads as busier.
       if (!rt.invisible) {
         const ambientForce = props.force ?? 1;
-        if (Math.random() < dt * (2 + ambientForce * 3)) {
+        rt.windAccum = (rt.windAccum || 0) + dt * (3 + ambientForce * 5);
+        while (rt.windAccum >= 1) {
+          rt.windAccum -= 1;
           const px = box.x + Math.random() * box.w;
           const py = box.y + Math.random() * box.h;
           this.particles.wind(px, py, v, Math.min(2, ambientForce));
@@ -350,7 +358,13 @@ export class Engine {
       const maxSpeed = PHYSICS.MOVE_SPEED * 1.8 * force;
       if (v.x) { pushedX = true; p.windVx += v.x * accel * dt; p.windVx = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVx)); }
       if (v.y) { pushedY = true; p.windVy += v.y * accel * dt; p.windVy = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVy)); }
-      if (Math.random() < dt * 12) this.particles.wind(p.x + p.w / 2, p.y + p.h / 2, v, strength);
+      // Same fixed-rate accumulator as the ambient stream above, just
+      // centered on the player while they're actually being pushed.
+      rt.pushWindAccum = (rt.pushWindAccum || 0) + dt * 12 * Math.max(0.3, strength);
+      while (rt.pushWindAccum >= 1) {
+        rt.pushWindAccum -= 1;
+        this.particles.wind(p.x + p.w / 2, p.y + p.h / 2, v, strength);
+      }
     }
     // decay back to zero once the player leaves every fan zone
     if (!pushedX) p.windVx *= 0.8;
@@ -368,6 +382,11 @@ export class Engine {
       // obstacle — safe to touch and stand on — while a plain hazard stays
       // non-solid (you don't get stuck on a lethal spike, you just die).
       if (!SOLID_TYPES.has(t) && !(HAZARD_TYPES.has(t) && rt.harmless)) continue;
+      // A block or platform marked "tueur" flips the same way in reverse: it
+      // must stay non-solid so the player can actually overlap it (otherwise
+      // normal collision would just push them out before death could ever be
+      // detected) — _checkHazardsAndGoal is what kills them on that overlap.
+      if ((t === ENTITY_TYPES.BLOCK || t === ENTITY_TYPES.PLATFORM) && rt.deadly) continue;
       rects.push({ id: rt.def.id, x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL, dx: rt.dx || 0, dy: rt.dy || 0 });
     }
     return rects;
@@ -515,6 +534,14 @@ export class Engine {
         if (!rt.harmless && !rt.passable) this.killPlayer();
         continue;
       }
+      if ((t === ENTITY_TYPES.BLOCK || t === ENTITY_TYPES.PLATFORM) && rt.deadly) {
+        // Mirrors the hazard rule above but with the polarity flipped: a
+        // block/platform is safe by default, "tueur" makes it lethal, and
+        // "traversable" still always wins (walk straight through, no harm
+        // either way).
+        if (!rt.passable) this.killPlayer();
+        continue;
+      }
       if (t === ENTITY_TYPES.SPRING && !rt.passable) {
         const dir = (rt.def.props && rt.def.props.direction) || 'up';
         const power = ((rt.def.props && rt.def.props.power) || 1.6) * PHYSICS.JUMP_POWER;
@@ -523,7 +550,7 @@ export class Engine {
         sfx.spring();
         this.particles.dust(rt.x + box.w / 2, rt.y);
       }
-      if (t === ENTITY_TYPES.GOAL && !this.finishing) {
+      if (t === ENTITY_TYPES.GOAL && !this.finishing && !rt.passable) {
         this._startDoorClose(rt, box);
       }
       if (t === ENTITY_TYPES.CHECKPOINT && !rt.activated) {
@@ -733,6 +760,7 @@ export class Engine {
           if ('passable' in params) target.passable = !!params.passable;
           if ('invisible' in params) target.invisible = !!params.invisible;
           if ('harmless' in params) target.harmless = !!params.harmless;
+          if ('deadly' in params) target.deadly = !!params.deadly;
           if ('facing' in params) target.facing = params.facing;
         }
         break;
@@ -808,6 +836,7 @@ export class Engine {
           if ('passable' in params) target.passable = !!target.def.passable;
           if ('invisible' in params) target.invisible = !!target.def.invisible;
           if ('harmless' in params) target.harmless = !!target.def.harmless;
+          if ('deadly' in params) target.deadly = !!target.def.deadly;
           if ('facing' in params && target.def.props) target.facing = target.def.props.facing || 'up';
         }
         break;
@@ -960,18 +989,34 @@ export class Engine {
         break;
       }
       case ENTITY_TYPES.PLATFORM: {
-        const custom = rt.def.props && rt.def.props.color;
-        const c0 = custom ? shadeColor(custom, 25) : '#5b93ee';
-        const c1 = custom || '#2d6cdf';
-        const c2 = custom ? shadeColor(custom, -35) : '#1a4bb0';
-        const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
-        grad.addColorStop(0, c0); grad.addColorStop(0.5, c1); grad.addColorStop(1, c2);
-        ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
-        ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(rt.x, rt.y, w, 3);
-        ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
-        // plank seams
-        ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-        for (let i = 1; i < rt.def.w; i++) { ctx.beginPath(); ctx.moveTo(rt.x + i * CELL, rt.y + 2); ctx.lineTo(rt.x + i * CELL, rt.y + h - 2); ctx.stroke(); }
+        const pprops = rt.def.props || {};
+        if (pprops.style === 'block') {
+          // Same flat fill + edge highlight/shadow treatment as a solid
+          // BLOCK cell (see above), just applied once to the platform's own
+          // rectangle — it's a standalone moving piece, not blended into a
+          // wider seamless mass, so every edge always gets the treatment.
+          ctx.fillStyle = '#181a26';
+          ctx.fillRect(rt.x, rt.y, w, h);
+          ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(rt.x, rt.y, w, 3);
+          ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(rt.x, rt.y + h - 3, w, 3);
+          ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect(rt.x, rt.y, 3, h);
+          ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(rt.x + w - 3, rt.y, 3, h);
+          ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+          ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
+        } else {
+          const custom = pprops.color;
+          const c0 = custom ? shadeColor(custom, 25) : '#5b93ee';
+          const c1 = custom || '#2d6cdf';
+          const c2 = custom ? shadeColor(custom, -35) : '#1a4bb0';
+          const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
+          grad.addColorStop(0, c0); grad.addColorStop(0.5, c1); grad.addColorStop(1, c2);
+          ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
+          ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(rt.x, rt.y, w, 3);
+          ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
+          // plank seams
+          ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+          for (let i = 1; i < rt.def.w; i++) { ctx.beginPath(); ctx.moveTo(rt.x + i * CELL, rt.y + 2); ctx.lineTo(rt.x + i * CELL, rt.y + h - 2); ctx.stroke(); }
+        }
         break;
       }
       case ENTITY_TYPES.SPIKE: {

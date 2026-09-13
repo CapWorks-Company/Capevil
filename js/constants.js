@@ -22,22 +22,25 @@ export const SOLID_TYPES = new Set([ENTITY_TYPES.BLOCK, ENTITY_TYPES.PLATFORM]);
 // Entity "state" used to be a single exclusive enum (normal/passable/invisible/
 // harmless). That made "invisible" behave like a ghost (unseen AND unable to
 // hurt/collide) which is backwards from what an invisible hazard should do.
-// It is now three independent boolean toggles living directly on the entity:
-//   passable  -> no collision at all (solids become walk-through; hazards stop hurting)
+// It is now independent boolean toggles living directly on the entity:
+//   passable  -> no collision at all (solids become walk-through; hazards/deadly blocks stop hurting)
 //   invisible -> not rendered in-game, but still fully solid/dangerous
-//   harmless  -> hazard no longer kills (still visible, still solid if applicable)
-export const ENTITY_TOGGLES = ['passable', 'invisible', 'harmless'];
+//   harmless  -> hazard (spike/spinner) no longer kills (still visible, still solid if applicable)
+//   deadly    -> a normally-safe solid block/platform instead kills the player on contact (like a hazard)
+export const ENTITY_TOGGLES = ['passable', 'invisible', 'harmless', 'deadly'];
 export const TOGGLE_LABELS = {
   passable: 'Traversable (aucune collision)',
   invisible: 'Invisible (mais toujours actif)',
   harmless: 'Inoffensif (ne tue pas)',
+  deadly: 'Tueur (tue le joueur au contact)',
 };
 
 // Which toggles make sense to show for a given entity type in the editor.
 export function togglesForType(type) {
   switch (type) {
+    case ENTITY_TYPES.BLOCK:
     case ENTITY_TYPES.PLATFORM:
-      return ['passable', 'invisible'];
+      return ['passable', 'invisible', 'deadly'];
     case ENTITY_TYPES.SPIKE:
     case ENTITY_TYPES.SPINNER:
       return ['passable', 'invisible', 'harmless'];
@@ -46,14 +49,13 @@ export function togglesForType(type) {
     case ENTITY_TYPES.TELEPORTER:
       return ['passable', 'invisible'];
     case ENTITY_TYPES.GOAL:
+      return ['passable', 'invisible'];
     case ENTITY_TYPES.CHECKPOINT:
       return ['invisible'];
-    case ENTITY_TYPES.BLOCK:
     case ENTITY_TYPES.BUTTON:
     case ENTITY_TYPES.PLATE:
-      // A block is now placed cell-by-cell and assembled seamlessly with its
-      // neighbors — no per-block toggles to keep that simple. A button/plate's
-      // whole point is to be a visible, physical switch, so it's never hidden.
+      // A button/plate's whole point is to be a visible, physical switch, so
+      // it's never hidden and never itself a hazard.
       return [];
     default:
       return [];

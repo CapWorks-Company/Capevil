@@ -54,6 +54,7 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
     passable: false,
     invisible: false,
     harmless: false,
+    deadly: false,
     props: {},
   };
   switch (type) {
@@ -70,7 +71,9 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
       base.props = { speed: 2.2, radius: 0.9 };
       break;
     case ENTITY_TYPES.PLATFORM:
-      base.w = 2;
+      // Same footprint as a freshly-placed solid block (1×1) by default —
+      // still freely resizable afterward via the props panel, unlike a block.
+      base.props = { style: 'color', color: null };
       break;
     case ENTITY_TYPES.TELEPORTER:
       base.props = { frequency: level ? nextTeleporterFrequency(level) : 1, oneUse: false };
@@ -192,6 +195,7 @@ export function normalizeLevel(rawLevel) {
         passable: e.passable ?? (legacyState === 'passable'),
         invisible: e.invisible ?? (legacyState === 'invisible'),
         harmless: e.harmless ?? (legacyState === 'harmless'),
+        deadly: !!e.deadly,
         props: e.props || {},
       };
       return out;
@@ -224,7 +228,10 @@ export function normalizeLevel(rawLevel) {
       delete e.props.mode; delete e.props.loopInterval; delete e.props.cooldown; delete e.props.resetAfterActions;
     }
     if (e.type === ENTITY_TYPES.PLATFORM) {
-      e.props.color = e.props.color || null; // null = default look, same as a solid block
+      // Appearance is now an explicit choice: a custom/default color (a
+      // wooden-plank-style platform), or looking exactly like a solid block.
+      e.props.style = e.props.style === 'block' ? 'block' : 'color';
+      e.props.color = e.props.color || null; // null = default blue, only relevant when style === 'color'
     }
     if (hasActionList(e)) {
       e.props.actions = (e.props.actions || []).map((a) => {
