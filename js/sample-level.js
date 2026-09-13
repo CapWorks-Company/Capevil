@@ -2,7 +2,7 @@
 // control inversion (troll), a chained/sequential moving platform, a spring,
 // oriented spikes, an invisible-but-solid block, a wind fan, a looping
 // platform, linked teleporters, a spinning hazard, a checkpoint and the goal.
-import { ENTITY_TYPES, TRIGGER_MODES, ACTION_TYPES } from './constants.js';
+import { ENTITY_TYPES, ACTION_TYPES } from './constants.js';
 import { createEmptyLevel, createEntity, createAction } from './level-model.js';
 
 export function buildSampleLevel() {
@@ -10,8 +10,10 @@ export function buildSampleLevel() {
   level.author = 'Level Devil';
   level.cols = 50;
   level.rows = 14;
-  level.editBounds = { colMin: 0, colMax: level.cols - 1, rowMin: 0, rowMax: level.rows - 1 };
-  level.playerStart = { x: 1, y: 11 };
+  // Keep the spawn's own state (gravity/visibility) that createEmptyLevel
+  // already set up — only move it, don't replace the whole object.
+  level.playerStart.x = 1;
+  level.playerStart.y = 11;
 
   const add = (type, x, y, overrides) => {
     const e = createEntity(type, x, y, overrides, level);
@@ -26,13 +28,15 @@ export function buildSampleLevel() {
   // trigger au sol, but…), exactement comme les pointes.
 
   // --- Floor A : départ, ressort, pointes orientées ---------------------
-  add(ENTITY_TYPES.BLOCK, 0, 13, { w: 18 });
+  // Le sol est maintenant assemblé case par case (les blocs solides ne se
+  // redimensionnent plus) : les cellules adjacentes se rendent sans jointure.
+  for (let i = 0; i < 18; i++) add(ENTITY_TYPES.BLOCK, i, 13);
   add(ENTITY_TYPES.SPRING, 8, 12, { props: { direction: 'up', power: 1.6 } });
   add(ENTITY_TYPES.SPIKE, 9, 10, { props: { facing: 'up' } });
   add(ENTITY_TYPES.SPIKE, 9, 11, { props: { facing: 'up' } });
   add(ENTITY_TYPES.SPIKE, 9, 12, { props: { facing: 'up' } });
   // pointes au plafond, pointant vers le bas
-  add(ENTITY_TYPES.BLOCK, 12, 8, { w: 3 });
+  for (let i = 0; i < 3; i++) add(ENTITY_TYPES.BLOCK, 12 + i, 8);
   add(ENTITY_TYPES.SPIKE, 12, 9, { w: 3, props: { facing: 'down' } });
 
   // Bloc invisible mais bien solide : on ne le voit pas, mais on peut monter
@@ -43,36 +47,36 @@ export function buildSampleLevel() {
   const platform = add(ENTITY_TYPES.PLATFORM, 17, 9, { w: 2 });
   add(ENTITY_TYPES.TRIGGER, 16, 12, {
     props: {
-      mode: TRIGGER_MODES.ONCE,
       actions: [
-        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: platform.id, delay: 0, params: { dx: 0, dy: 4, duration: 0.6 } }),
-        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: platform.id, delay: 0.7, params: { dx: 6, dy: 0, duration: 2.0 } }),
+        // Axe Y : +1 monte, -1 descend (l'inverse de dy en pixels-écran).
+        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: platform.id, delay: 0, params: { axisX: 0, axisY: -4, duration: 0.6 } }),
+        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: platform.id, delay: 0.7, params: { axisX: 6, axisY: 0, duration: 2.0 } }),
       ],
     },
   });
   // fosse : colonnes 18 à 23 → aucun sol (mortel si on tombe dedans)
 
   // --- Floor B : gravité, troll, spinner, ventilateur --------------------
-  add(ENTITY_TYPES.BLOCK, 24, 13, { w: 12 });
+  for (let i = 0; i < 12; i++) add(ENTITY_TYPES.BLOCK, 24 + i, 13);
   add(ENTITY_TYPES.CHECKPOINT, 24, 12);
 
   add(ENTITY_TYPES.TRIGGER, 26, 12, {
-    props: { mode: TRIGGER_MODES.ONCE, actions: [
-      createAction(ACTION_TYPES.SET_GRAVITY, { targetId: 'player', delay: 0, params: { direction: 'up' } }),
+    props: { actions: [
+      createAction(ACTION_TYPES.SET_PLAYER_STATE, { delay: 0, params: { gravity: 'up' } }),
     ] },
   });
-  add(ENTITY_TYPES.BLOCK, 26, 2, { w: 6 });
+  for (let i = 0; i < 6; i++) add(ENTITY_TYPES.BLOCK, 26 + i, 2);
   // Ici le joueur est "collé" au plafond : sa boîte de collision est sur la
   // ligne 3 (juste sous le plafond posé en ligne 2).
   add(ENTITY_TYPES.TRIGGER, 30, 3, {
-    props: { mode: TRIGGER_MODES.ONCE, actions: [
-      createAction(ACTION_TYPES.SET_GRAVITY, { targetId: 'player', delay: 0, params: { direction: 'down' } }),
+    props: { actions: [
+      createAction(ACTION_TYPES.SET_PLAYER_STATE, { delay: 0, params: { gravity: 'down' } }),
     ] },
   });
 
   add(ENTITY_TYPES.TRIGGER, 32, 12, {
-    props: { mode: TRIGGER_MODES.ONCE, actions: [
-      createAction(ACTION_TYPES.INVERT_CONTROLS, { targetId: 'player', delay: 0, params: { axis: 'horizontal', enabled: true, duration: 4 } }),
+    props: { actions: [
+      createAction(ACTION_TYPES.SET_PLAYER_STATE, { delay: 0, params: { invert: 'horizontal', invertDuration: 4 } }),
     ] },
   });
   add(ENTITY_TYPES.SPINNER, 33, 12, { props: { speed: 2.4, radius: 0.9 } });
@@ -82,18 +86,18 @@ export function buildSampleLevel() {
   add(ENTITY_TYPES.FAN, 36, 9, { h: 4, props: { direction: 'right', force: 1.3 } });
   // fosse colonnes 36-38 sous le ventilateur
 
-  // --- Floor C : plateforme en boucle, téléporteurs, arrivée --------------
-  add(ENTITY_TYPES.BLOCK, 39, 13, { w: 11 });
+  // --- Floor C : plateforme en boucle, bouton, plaque, téléporteurs, arrivée --
+  for (let i = 0; i < 11; i++) add(ENTITY_TYPES.BLOCK, 39 + i, 13);
 
-  // Plateforme qui boucle toute seule : gauche 3 cases, pause, retour, pause…
+  // Plateforme qui boucle toute seule : monte, redescend, et recommence — la
+  // case "Boucle infinie" du trigger se charge de tout relancer elle-même.
   const loopPlat = add(ENTITY_TYPES.PLATFORM, 41, 11);
   add(ENTITY_TYPES.TRIGGER, 40, 12, {
     props: {
-      mode: TRIGGER_MODES.LOOP,
-      loopInterval: 4,
+      loop: true,
       actions: [
-        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: loopPlat.id, delay: 0, params: { dx: 0, dy: -3, duration: 0.8 } }),
-        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: loopPlat.id, delay: 1.8, params: { dx: 0, dy: 3, duration: 0.8 } }),
+        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: loopPlat.id, delay: 0, params: { axisX: 0, axisY: 3, duration: 0.8 } }),
+        createAction(ACTION_TYPES.MOVE_ELEMENT, { targetId: loopPlat.id, delay: 1.8, params: { axisX: 0, axisY: -3, duration: 0.8 } }),
       ],
     },
   });

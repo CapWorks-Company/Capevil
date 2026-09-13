@@ -1,5 +1,5 @@
 // Level data model: plain-JSON-serializable structures shared by the game and the editor.
-import { ENTITY_TYPES, TRIGGER_MODES, DEFAULT_GRID, TELEPORTER_MAX_PER_FREQUENCY } from './constants.js';
+import { ENTITY_TYPES, ACTION_TYPES, DEFAULT_GRID, GRID_LIMITS, TELEPORTER_MAX_PER_FREQUENCY } from './constants.js';
 
 let _uidCounter = 1;
 export function uid(prefix = 'e') {
@@ -14,34 +14,19 @@ export function createEmptyLevel(title = 'Nouveau niveau') {
     author: null,
     cols: DEFAULT_GRID.cols,
     rows: DEFAULT_GRID.rows,
-    playerStart: { x: 1, y: DEFAULT_GRID.rows - 2 },
+    // The player's spawn point also carries its own initial state: which way
+    // gravity pulls at the start of the level, and whether the player sprite
+    // itself is drawn (sound/particles keep working either way).
+    playerStart: { x: 1, y: DEFAULT_GRID.rows - 2, gravityDir: 'down', invisible: false },
     entities: [],
     triggers: [],
-    // The editable area within the grid — always in effect (no on/off
-    // toggle): by default it spans the whole grid (0..cols-1 / 0..rows-1),
-    // which simply means nothing is restricted. Narrowing it protects a
-    // decorative border from being edited. See normalizeEditBounds.
-    editBounds: { colMin: 0, colMax: DEFAULT_GRID.cols - 1, rowMin: 0, rowMax: DEFAULT_GRID.rows - 1 },
+    // "Condition du monde" — world-wide settings, changeable live in-game via
+    // the "Changer l'état du monde" action (grid size excepted, obviously).
+    gravityScale: 1,
+    background: '#1b1e2b',
     createdAt: null,
     updatedAt: null,
   };
-}
-
-// Validates/clamps an editBounds object against the level's current grid
-// size. Always returns a concrete { colMin, colMax, rowMin, rowMax } — a
-// missing/malformed field just falls back to that edge of the grid, so an
-// empty/absent editBounds naturally means "the whole grid is editable".
-export function normalizeEditBounds(eb, cols, rows) {
-  const src = eb || {};
-  let colMin = Number.isFinite(src.colMin) ? Math.round(src.colMin) : 0;
-  let colMax = Number.isFinite(src.colMax) ? Math.round(src.colMax) : cols - 1;
-  let rowMin = Number.isFinite(src.rowMin) ? Math.round(src.rowMin) : 0;
-  let rowMax = Number.isFinite(src.rowMax) ? Math.round(src.rowMax) : rows - 1;
-  colMin = Math.max(0, Math.min(colMin, cols - 1));
-  colMax = Math.max(colMin, Math.min(colMax, cols - 1));
-  rowMin = Math.max(0, Math.min(rowMin, rows - 1));
-  rowMax = Math.max(rowMin, Math.min(rowMax, rows - 1));
-  return { colMin, colMax, rowMin, rowMax };
 }
 
 // Picks the lowest teleporter frequency that still has room (< max members),
@@ -92,11 +77,15 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
       break;
     case ENTITY_TYPES.TRIGGER:
       base.w = 1; base.h = 1;
-      base.props = { mode: TRIGGER_MODES.ONCE, loopInterval: 2, actions: [] };
+      base.props = { actions: [], loop: false };
       break;
     case ENTITY_TYPES.BUTTON:
       base.w = 1; base.h = 1;
-      base.props = { cooldown: 1, actions: [] };
+      base.props = { actions: [], loop: false, resetAfterActions: 'none' };
+      break;
+    case ENTITY_TYPES.PLATE:
+      base.w = 1; base.h = 1;
+      base.props = { actions: [], loop: false };
       break;
     default:
       break;
@@ -104,11 +93,11 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
   return { ...base, ...overrides };
 }
 
-// Both TRIGGER and BUTTON entities carry an ordered `props.actions` list —
-// this helper is the one place that needs to know that, so cleanup/migration
-// code doesn't have to special-case each type separately.
+// TRIGGER, BUTTON and PLATE all carry an ordered `props.actions` list — this
+// helper is the one place that needs to know that, so cleanup/migration code
+// doesn't have to special-case each type separately.
 export function hasActionList(entity) {
-  return entity.type === ENTITY_TYPES.TRIGGER || entity.type === ENTITY_TYPES.BUTTON;
+  return entity.type === ENTITY_TYPES.TRIGGER || entity.type === ENTITY_TYPES.BUTTON || entity.type === ENTITY_TYPES.PLATE;
 }
 
 export function createAction(type, overrides = {}) {
@@ -132,8 +121,8 @@ export function findEntity(level, id) {
 
 export function removeEntity(level, id) {
   level.entities = level.entities.filter(e => e.id !== id);
-  // Triggers and buttons carry action lists; clean up any of their actions
-  // that referenced the removed entity so we don't keep dangling ids.
+  // Triggers/buttons/plates carry action lists; clean up any of their
+  // actions that referenced the removed entity so we don't keep dangling ids.
   for (const ent of level.entities) {
     if (hasActionList(ent) && ent.props && ent.props.actions) {
       ent.props.actions = ent.props.actions.filter(a => a.targetId !== id);
@@ -152,7 +141,7 @@ export function validateLevel(level) {
     errors.push('Ajoute au moins un bloc (ou une plateforme) pour servir de support au joueur.');
   }
   if (!level.entities.some(e => e.type === ENTITY_TYPES.GOAL)) errors.push('Ajoute une case "But" (goal) pour terminer le niveau.');
-  if (level.cols < 5 || level.rows < 5) errors.push('La grille est trop petite.');
+  if (level.cols < GRID_LIMITS.colsMin || level.rows < GRID_LIMITS.rowsMin) errors.push('La grille est trop petite.');
   const freqCounts = {};
   for (const e of level.entities) {
     if (e.type !== ENTITY_TYPES.TELEPORTER) continue;
@@ -171,26 +160,42 @@ export function serializeLevel(level) {
 
 // Fills in any missing fields so hand-edited or older JSON files never crash
 // the editor/engine (which assume every entity has `props`, `w`, `h`, and the
-// three boolean toggles). Also migrates the old single `state` enum
-// (normal/passable/invisible/harmless) to the new independent booleans.
+// three boolean toggles), and migrates several now-removed concepts from
+// older saved levels:
+//   - the "decor" entity type is gone — those entities are simply dropped.
+//   - triggers no longer have a firing "mode" — any old mode/loopInterval is
+//     just ignored (the fresh `loop` boolean below replaces it).
+//   - buttons no longer have a fixed `cooldown` — it's ignored in favor of
+//     "ready once its actions finish", and `resetAfterActions` defaults in.
+//   - move-element actions used `dx`/`dy` (screen-space); they're migrated to
+//     `axisX`/`axisY` (axisY is inverted: +1 now means "up").
+//   - the old per-field player actions (setGravity/invertControls/
+//     setJumpPower/setSpeed) are folded into one consolidated
+//     ACTION_TYPES.SET_PLAYER_STATE action each; the old shakeCamera action
+//     is dropped (camera shake is now automatic-only, on death).
+//   - a move-element action that targeted the player is detargeted (the
+//     player can no longer be a moveElement target — that's the
+//     teleporter's job).
 export function normalizeLevel(rawLevel) {
   const level = { ...createEmptyLevel(), ...rawLevel };
-  level.entities = (level.entities || []).map((e) => {
-    const legacyState = typeof e.state === 'string' ? e.state : null;
-    const out = {
-      id: e.id || uid('ent'),
-      type: e.type,
-      x: e.x ?? 0,
-      y: e.y ?? 0,
-      w: e.w ?? 1,
-      h: e.h ?? 1,
-      passable: e.passable ?? (legacyState === 'passable'),
-      invisible: e.invisible ?? (legacyState === 'invisible'),
-      harmless: e.harmless ?? (legacyState === 'harmless'),
-      props: e.props || {},
-    };
-    return out;
-  });
+  level.entities = (level.entities || [])
+    .filter((e) => e.type !== 'decor')
+    .map((e) => {
+      const legacyState = typeof e.state === 'string' ? e.state : null;
+      const out = {
+        id: e.id || uid('ent'),
+        type: e.type,
+        x: e.x ?? 0,
+        y: e.y ?? 0,
+        w: e.w ?? 1,
+        h: e.h ?? 1,
+        passable: e.passable ?? (legacyState === 'passable'),
+        invisible: e.invisible ?? (legacyState === 'invisible'),
+        harmless: e.harmless ?? (legacyState === 'harmless'),
+        props: e.props || {},
+      };
+      return out;
+    });
   for (const e of level.entities) {
     if (e.type === ENTITY_TYPES.SPIKE) {
       e.props.facing = e.props.facing || 'up';
@@ -207,32 +212,77 @@ export function normalizeLevel(rawLevel) {
       e.props.frequency = e.props.frequency || 1;
       e.props.oneUse = !!e.props.oneUse;
     }
-    if (e.type === ENTITY_TYPES.TRIGGER) {
-      e.props.mode = e.props.mode || TRIGGER_MODES.ONCE;
-      e.props.loopInterval = e.props.loopInterval || 2;
+    if (e.type === ENTITY_TYPES.TRIGGER || e.type === ENTITY_TYPES.PLATE) {
+      e.props.loop = !!e.props.loop;
+      delete e.props.mode; delete e.props.loopInterval; // old firing-mode concept, gone
     }
     if (e.type === ENTITY_TYPES.BUTTON) {
-      e.props.cooldown = e.props.cooldown ?? 1;
+      e.props.loop = !!e.props.loop;
+      e.props.resetAfterActions = e.props.resetAfterActions || 'none';
+      delete e.props.mode; delete e.props.loopInterval; delete e.props.cooldown; // old fixed cooldown, gone
+    }
+    if (e.type === ENTITY_TYPES.PLATFORM) {
+      e.props.color = e.props.color || null; // null = default look, same as a solid block
     }
     if (hasActionList(e)) {
       e.props.actions = (e.props.actions || []).map((a) => {
+        let type = a.type;
+        let targetId = a.targetId ?? null;
         const params = { ...(a.params || {}) };
         // migrate legacy SET_STATE `state` string param to the new boolean trio
-        if (a.type === 'setState' && typeof params.state === 'string') {
+        if (type === 'setState' && typeof params.state === 'string') {
           params.passable = params.state === 'passable';
           params.invisible = params.state === 'invisible';
           params.harmless = params.state === 'harmless';
           delete params.state;
         }
+        // fold the old per-field player actions into one consolidated action
+        if (type === 'setGravity') {
+          type = ACTION_TYPES.SET_PLAYER_STATE;
+          const gravity = params.direction; targetId = null;
+          Object.keys(params).forEach((k) => delete params[k]);
+          params.gravity = gravity;
+        } else if (type === 'invertControls') {
+          type = ACTION_TYPES.SET_PLAYER_STATE; targetId = null;
+          const invert = params.axis || 'horizontal', invertDuration = params.duration || 0;
+          Object.keys(params).forEach((k) => delete params[k]);
+          params.invert = invert; params.invertDuration = invertDuration;
+        } else if (type === 'setJumpPower') {
+          type = ACTION_TYPES.SET_PLAYER_STATE; targetId = null;
+          const jumpMult = params.value, statDuration = params.duration || 0;
+          Object.keys(params).forEach((k) => delete params[k]);
+          params.jumpMult = jumpMult; params.statDuration = statDuration;
+        } else if (type === 'setSpeed') {
+          type = ACTION_TYPES.SET_PLAYER_STATE; targetId = null;
+          const speedMult = params.value, statDuration = params.duration || 0;
+          Object.keys(params).forEach((k) => delete params[k]);
+          params.speedMult = speedMult; params.statDuration = statDuration;
+        } else if (type === 'shakeCamera') {
+          return null; // dropped entirely — filtered out below
+        }
+        // migrate legacy dx/dy (screen-space) -> axisX/axisY (axisY inverted)
+        if (type === ACTION_TYPES.MOVE_ELEMENT) {
+          if (('dx' in params || 'dy' in params) && !('axisX' in params) && !('axisY' in params)) {
+            params.axisX = params.dx || 0;
+            params.axisY = -(params.dy || 0);
+          }
+          delete params.dx; delete params.dy;
+          // the player can no longer be a moveElement target (that's the
+          // teleporter's job now) — detarget rather than crash on old data
+          if (targetId === 'player') targetId = null;
+        }
         return {
-          id: a.id || uid('act'), type: a.type, delay: a.delay || 0,
-          targetId: a.targetId ?? null, params,
+          id: a.id || uid('act'), type, delay: a.delay || 0,
+          targetId, params,
         };
-      });
+      }).filter(Boolean);
     }
   }
   if (!level.playerStart) level.playerStart = { x: 1, y: 1 };
-  level.editBounds = normalizeEditBounds(rawLevel.editBounds, level.cols, level.rows);
+  level.playerStart.gravityDir = level.playerStart.gravityDir || 'down';
+  level.playerStart.invisible = !!level.playerStart.invisible;
+  level.gravityScale = Number.isFinite(level.gravityScale) ? level.gravityScale : 1;
+  level.background = level.background || '#1b1e2b';
   return level;
 }
 

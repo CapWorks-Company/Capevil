@@ -41,6 +41,24 @@ export class ParticleSystem {
     this.burst(x, y, { count: 46, colors: ['#ffd166', '#06d6a0', '#4cc9f0', '#f72585', '#ffffff'], speed: 280, angle: -Math.PI / 2, spread: Math.PI, gravity: 480, life: 1.2, size: 5 });
   }
 
+  // A brief streak blown in the wind's direction — called probabilistically
+  // (not every frame) by the fan's continuous push, so it doesn't need to
+  // self-throttle. `v` is one of the unit GRAVITY_VECTORS; `strength` (0-1+)
+  // scales both how fast and how many particles fly off.
+  wind(x, y, v, strength = 1) {
+    const angle = Math.atan2(v.y, v.x);
+    this.burst(x, y, {
+      count: 2 + Math.round(Math.min(2, strength) * 2),
+      colors: ['#e7f8ff', '#9fdcf2', '#ffffff'],
+      speed: 240 * Math.max(0.35, strength),
+      spread: 0.6,
+      angle,
+      gravity: 0,
+      life: 0.3,
+      size: 2.2,
+    });
+  }
+
   update(dt) {
     if (!this.particles.length) return;
     for (const p of this.particles) {

@@ -11,9 +11,9 @@ export const ENTITY_TYPES = {
   TELEPORTER: 'teleporter',  // linked by frequency, cycles the player between peers
   GOAL: 'goal',              // level end
   CHECKPOINT: 'checkpoint',  // saves respawn point when touched
-  TRIGGER: 'trigger',        // invisible trigger zone, fires once (or per mode)
-  BUTTON: 'button',          // visible pressable switch: fires repeatedly with a cooldown
-  DECOR: 'decor',            // purely visual, no collision
+  TRIGGER: 'trigger',        // invisible zone, fires once per entry (or loops forever)
+  BUTTON: 'button',          // visible pressable switch: fires on press, ready again once its actions finish
+  PLATE: 'plate',            // visible pressure plate: repeats its actions for as long as the player stays on it
 };
 
 export const HAZARD_TYPES = new Set([ENTITY_TYPES.SPIKE, ENTITY_TYPES.SPINNER]);
@@ -36,7 +36,6 @@ export const TOGGLE_LABELS = {
 // Which toggles make sense to show for a given entity type in the editor.
 export function togglesForType(type) {
   switch (type) {
-    case ENTITY_TYPES.BLOCK:
     case ENTITY_TYPES.PLATFORM:
       return ['passable', 'invisible'];
     case ENTITY_TYPES.SPIKE:
@@ -48,11 +47,13 @@ export function togglesForType(type) {
       return ['passable', 'invisible'];
     case ENTITY_TYPES.GOAL:
     case ENTITY_TYPES.CHECKPOINT:
-    case ENTITY_TYPES.DECOR:
       return ['invisible'];
+    case ENTITY_TYPES.BLOCK:
     case ENTITY_TYPES.BUTTON:
-      // A button's whole point is to be a visible, physical switch — unlike
-      // a trigger zone it is never hidden, so no toggles apply to it.
+    case ENTITY_TYPES.PLATE:
+      // A block is now placed cell-by-cell and assembled seamlessly with its
+      // neighbors — no per-block toggles to keep that simple. A button/plate's
+      // whole point is to be a visible, physical switch, so it's never hidden.
       return [];
     default:
       return [];
@@ -70,33 +71,28 @@ export const GRAVITY_VECTORS = {
   right: { x: 1, y: 0 },
 };
 
+// Every trigger/button/plate action reduces to exactly these five kinds.
 export const ACTION_TYPES = {
-  MOVE_ELEMENT: 'moveElement',       // move a target by (dx,dy) cells over duration
-  SET_STATE: 'setState',             // set target's passable/invisible/harmless flags
-  SET_GRAVITY: 'setGravity',         // change player's gravity direction
-  INVERT_CONTROLS: 'invertControls', // toggle troll controls (swap keys)
-  SET_JUMP_POWER: 'setJumpPower',    // change player's jump power (multiplier)
-  SET_SPEED: 'setSpeed',             // change player's move speed (multiplier)
-  TELEPORT: 'teleport',              // instantly move target to (x,y) cells
-  SHAKE_CAMERA: 'shakeCamera',       // cosmetic
-};
-
-export const TRIGGER_MODES = {
-  ONCE: 'once',       // fires the first time the player enters, never again
-  REPEAT: 'repeat',   // fires every time the player enters the zone
-  ON_EXIT: 'onExit',  // fires when the player leaves the zone
-  LOOP: 'loop',       // fires once on entry, then repeats its whole action list forever
+  MOVE_ELEMENT: 'moveElement',         // move a target element by an Axe X / Axe Y offset over a duration
+  TELEPORT: 'teleport',                // instantly move a target (or the player) to (x,y) cells
+  SET_WORLD_STATE: 'setWorldState',    // change gravity scale / background (never the grid size)
+  SET_STATE: 'setState',               // set a target's passable/invisible/harmless flags
+  SET_PLAYER_STATE: 'setPlayerState',  // change the player: gravity, inverted controls, visibility, jump/speed power
 };
 
 export const PHYSICS = {
-  GRAVITY_ACCEL: 1800,   // px/s^2 base gravity acceleration
-  MAX_FALL_SPEED: 1400,  // px/s terminal velocity along gravity axis
+  GRAVITY_ACCEL: 1800,   // px/s^2 base gravity acceleration (scaled by level.gravityScale)
+  MAX_FALL_SPEED: 1400,  // px/s terminal velocity along gravity axis (scaled by level.gravityScale)
   MOVE_SPEED: 260,       // px/s base horizontal (or gravity-perpendicular) speed
   JUMP_POWER: 620,       // px/s base jump impulse
   AUTO_SCROLL_SPEED: 200,// px/s forward auto-scroll (Geometry-Dash-like forward push)
 };
 
 export const DEFAULT_GRID = { cols: 30, rows: 14 };
+
+// Hard limits on grid size — the editor can no longer make these adjustable
+// beyond this range (columns 9-80, rows 9-30).
+export const GRID_LIMITS = { colsMin: 9, colsMax: 80, rowsMin: 9, rowsMax: 30 };
 
 // Teleporters sharing a "frequency" are linked together. Capped at 3 per
 // group (matches the physical idea of a few linked portals, and keeps the

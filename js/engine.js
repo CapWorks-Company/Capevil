@@ -3,7 +3,7 @@
 // and reused (read-only, no input) by editor.js for in-editor testing.
 import {
   CELL, ENTITY_TYPES, HAZARD_TYPES, SOLID_TYPES,
-  GRAVITY_VECTORS, ACTION_TYPES, TRIGGER_MODES, PHYSICS,
+  GRAVITY_VECTORS, ACTION_TYPES, PHYSICS,
 } from './constants.js';
 import { loadKeybinds, buildKeyMap } from './keybindings.js';
 import { sfx, unlockAudio } from './audio-fx.js';
@@ -85,22 +85,27 @@ export class Engine {
         anim: null, // { fromX,fromY,toX,toY,startTime,duration }
         dx: 0, dy: 0, // this-frame movement delta, for carrying the player along
         angle: 0,
-        firedOnce: false,
         wasOverlapping: false,
         activated: false,
         usedOnce: false,
-        buttonReadyAt: 0,
+        // trigger/button/plate scheduling state
+        looping: false,     // a "boucle infinie" cycle is currently running
+        holding: false,     // (plate only) the player is currently on it, auto-repeating
+        buttonReady: true,  // (button only) can be pressed again
+        awaitingReset: false, // (button, resetAfterActions:'onNextPress') next press reverts instead of firing
       });
     }
   }
 
   _resetPlayer() {
     const lvl = this.level;
+    const ps = lvl.playerStart || {};
     this.player = {
       x: this.respawn.x * CELL, y: this.respawn.y * CELL,
       w: CELL * 0.7, h: CELL * 0.7,
       vx: 0, vy: 0,
-      gravityDir: 'down',
+      gravityDir: ps.gravityDir || 'down',
+      invisible: !!ps.invisible,
       invert: { horizontal: false, vertical: false },
       jumpMult: 1, speedMult: 1,
       onGround: false,
@@ -123,8 +128,8 @@ export class Engine {
       rt.x = def.x * CELL; rt.y = def.y * CELL;
       rt.passable = !!def.passable; rt.invisible = !!def.invisible; rt.harmless = !!def.harmless;
       rt.anim = null; rt.dx = 0; rt.dy = 0; rt.angle = 0;
-      rt.firedOnce = false; rt.wasOverlapping = false; rt.usedOnce = false;
-      rt.buttonReadyAt = 0;
+      rt.wasOverlapping = false; rt.usedOnce = false;
+      rt.looping = false; rt.holding = false; rt.buttonReady = true; rt.awaitingReset = false;
       if (def.type !== ENTITY_TYPES.CHECKPOINT) rt.activated = false;
     }
   }
@@ -151,8 +156,7 @@ export class Engine {
     if (this.shake.time > 0) this.shake.time = Math.max(0, this.shake.time - dt);
   }
 
-  // Triggers a short, decaying camera shake — used automatically on death,
-  // and available to level authors via the SHAKE_CAMERA trigger action.
+  // Triggers a short, decaying camera shake — used automatically on death.
   _triggerShake(magnitude = 10, duration = 0.3) {
     this.shake = { magnitude, duration: Math.max(0.05, duration), time: Math.max(0.05, duration) };
   }
@@ -202,6 +206,7 @@ export class Engine {
     this._updateSpinnerAngles(dt);
     this._checkTriggers();
     this._checkButtons();
+    this._checkPlates();
     this._checkHazardsAndGoal();
     this._checkTeleporters();
     this._updateCamera();
@@ -238,29 +243,47 @@ export class Engine {
     }
   }
 
-  // Continuous wind push from FAN zones while the player overlaps them
-  // (unlike a spring's one-shot impulse). Left/right is the main use case
-  // requested, but any direction works. Builds up in `player.windVx/windVy`
-  // — a persistent contribution layered on top of whatever `_updatePhysics`
-  // computes for input/gravity that same frame — rather than writing
-  // straight into `vx`/`vy`, which would get overwritten immediately by the
-  // movement-axis input logic (that logic unconditionally sets velocity from
-  // the arrow keys each frame, Level-Devil-style, with no separate friction
-  // step to layer external forces onto).
+  // Continuous wind push from FAN zones while the player is within range
+  // (unlike a spring's one-shot impulse). The fan's own w/h only sets its
+  // visual thickness; how *far* it reaches is the separate `range` property
+  // (in cells, measured from the fan's own edge along the blow direction),
+  // optionally fading out toward the edge of that range ("diminution avec la
+  // distance") instead of pushing at full force right up to the cutoff.
   _applyFans(dt) {
     const p = this.player;
     let pushedX = false, pushedY = false;
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.FAN || rt.passable) continue;
-      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
-      if (!this._overlap(p, box)) continue;
-      const dir = (rt.def.props && rt.def.props.direction) || 'right';
+      const props = rt.def.props || {};
+      const dir = props.direction || 'right';
       const v = GRAVITY_VECTORS[dir];
-      const force = (rt.def.props && rt.def.props.force) ?? 1;
+      const range = Math.max(0, props.range ?? 5);
+      const fanW = rt.def.w * CELL, fanH = rt.def.h * CELL;
+      // Extend the hitbox by `range` cells, but only along the blow axis —
+      // the perpendicular size stays exactly what was authored.
+      let box = { x: rt.x, y: rt.y, w: fanW, h: fanH };
+      if (v.x > 0) box.w += range * CELL;
+      else if (v.x < 0) { box.x -= range * CELL; box.w += range * CELL; }
+      else if (v.y > 0) box.h += range * CELL;
+      else if (v.y < 0) { box.y -= range * CELL; box.h += range * CELL; }
+      if (!this._overlap(p, box)) continue;
+
+      let distCells = 0;
+      if (v.x > 0) distCells = Math.max(0, (p.x - (rt.x + fanW)) / CELL);
+      else if (v.x < 0) distCells = Math.max(0, (rt.x - (p.x + p.w)) / CELL);
+      else if (v.y > 0) distCells = Math.max(0, (p.y - (rt.y + fanH)) / CELL);
+      else if (v.y < 0) distCells = Math.max(0, (rt.y - (p.y + p.h)) / CELL);
+
+      let strength = 1;
+      if (props.falloff && range > 0) strength = Math.max(0, 1 - distCells / range);
+      if (strength <= 0) continue;
+
+      const force = (props.force ?? 1) * strength;
       const accel = PHYSICS.GRAVITY_ACCEL * force;
       const maxSpeed = PHYSICS.MOVE_SPEED * 1.8 * force;
       if (v.x) { pushedX = true; p.windVx += v.x * accel * dt; p.windVx = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVx)); }
       if (v.y) { pushedY = true; p.windVy += v.y * accel * dt; p.windVy = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVy)); }
+      if (Math.random() < dt * 12) this.particles.wind(p.x + p.w / 2, p.y + p.h / 2, v, strength);
     }
     // decay back to zero once the player leaves every fan zone
     if (!pushedX) p.windVx *= 0.8;
@@ -273,8 +296,11 @@ export class Engine {
     const rects = [];
     for (const rt of this.runtime.values()) {
       const t = rt.def.type;
-      if (!SOLID_TYPES.has(t)) continue;
       if (rt.passable) continue; // invisible solids are still fully solid
+      // A hazard (spike/spinner) marked "inoffensif" becomes a normal solid
+      // obstacle — safe to touch and stand on — while a plain hazard stays
+      // non-solid (you don't get stuck on a lethal spike, you just die).
+      if (!SOLID_TYPES.has(t) && !(HAZARD_TYPES.has(t) && rt.harmless)) continue;
       rects.push({ id: rt.def.id, x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL, dx: rt.dx || 0, dy: rt.dy || 0 });
     }
     return rects;
@@ -293,17 +319,19 @@ export class Engine {
   _updatePhysics(dt) {
     const p = this.player;
     const g = GRAVITY_VECTORS[p.gravityDir];
+    const gravityScale = Number.isFinite(this.level.gravityScale) ? this.level.gravityScale : 1;
     const input = this._input();
     const wasOnGround = p.onGround;
 
     // acceleration due to gravity
-    p.vx += g.x * PHYSICS.GRAVITY_ACCEL * dt;
-    p.vy += g.y * PHYSICS.GRAVITY_ACCEL * dt;
+    p.vx += g.x * PHYSICS.GRAVITY_ACCEL * gravityScale * dt;
+    p.vy += g.y * PHYSICS.GRAVITY_ACCEL * gravityScale * dt;
     // clamp fall speed along gravity axis
+    const maxFall = PHYSICS.MAX_FALL_SPEED * gravityScale;
     const fallSpeed = p.vx * g.x + p.vy * g.y;
-    if (fallSpeed > PHYSICS.MAX_FALL_SPEED) {
-      p.vx = g.x * PHYSICS.MAX_FALL_SPEED + p.vx * (1 - Math.abs(g.x));
-      p.vy = g.y * PHYSICS.MAX_FALL_SPEED + p.vy * (1 - Math.abs(g.y));
+    if (fallSpeed > maxFall) {
+      p.vx = g.x * maxFall + p.vx * (1 - Math.abs(g.x));
+      p.vy = g.y * maxFall + p.vy * (1 - Math.abs(g.y));
     }
 
     // movement axis is perpendicular to gravity
@@ -413,6 +441,10 @@ export class Engine {
           const radius = CELL * ((rt.def.props && rt.def.props.radius) || 0.9) * rt.def.w;
           if (!this._circleRectOverlap(cx, cy, radius, p)) continue;
         }
+        // "Inoffensif" hazards are solid now (see _solidRects) so normal
+        // collision resolution keeps the player from ever truly overlapping
+        // one; "traversable" hazards have zero collision, so overlap here
+        // just means passing harmlessly through. A plain hazard still kills.
         if (!rt.harmless && !rt.passable) this.killPlayer();
         continue;
       }
@@ -436,8 +468,10 @@ export class Engine {
   }
 
   // Teleporters sharing the same `frequency` cycle the player through the
-  // group in authored order. A `oneUse` teleporter disables only itself
-  // (its entrance) once used, so you can't walk straight back through it.
+  // group in authored order. When "sens unique" is on (synced across the
+  // whole frequency group by the editor), both the departure AND the
+  // arrival teleporter are marked used — otherwise the player could just
+  // walk back onto the one they arrived at and take the return trip.
   _checkTeleporters() {
     if (this._teleportCooldown > 0) return;
     const p = this.player;
@@ -464,65 +498,151 @@ export class Engine {
     p.y = targetRt.y + (nextDef.h * CELL - p.h) / 2;
     this._teleportCooldown = 0.5;
     sfx.teleport();
-    if (rt.def.props && rt.def.props.oneUse) rt.usedOnce = true;
+    if (rt.def.props && rt.def.props.oneUse) {
+      rt.usedOnce = true;
+      targetRt.usedOnce = true; // no backtracking through the one you land on
+    }
   }
 
+  // A trigger always fires when the player enters it (re-arms once they
+  // leave, so it can fire again on a later pass) — no separate "mode" to
+  // configure. If "boucle infinie" is on, entering it once kicks off a
+  // self-repeating cycle instead of a single pass.
   _checkTriggers() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.TRIGGER) continue;
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
       const overlapping = this._overlap(p, box);
-      const mode = (rt.def.props && rt.def.props.mode) || TRIGGER_MODES.ONCE;
-
       if (overlapping && !rt.wasOverlapping) {
-        if (mode === TRIGGER_MODES.ONCE) {
-          if (!rt.firedOnce) { rt.firedOnce = true; this._fireTrigger(rt); }
-        } else if (mode === TRIGGER_MODES.REPEAT) {
-          this._fireTrigger(rt);
-        } else if (mode === TRIGGER_MODES.LOOP) {
-          if (!rt.firedOnce) { rt.firedOnce = true; this._startLoop(rt); }
-        }
-      }
-      if (!overlapping && rt.wasOverlapping && mode === TRIGGER_MODES.ON_EXIT) {
-        this._fireTrigger(rt);
+        if (rt.def.props && rt.def.props.loop) this._fireLoop(rt);
+        else this._fireTrigger(rt);
       }
       rt.wasOverlapping = overlapping;
     }
   }
 
-  // A button is a visible, physical switch: unlike a trigger it can be
-  // pressed again and again, gated only by its own reset cooldown — no
-  // "once/repeat/onExit" mode to configure. Fires on entry (edge-triggered,
-  // like triggers) whenever the cooldown from its last press has elapsed.
+  // A button is a visible, physical switch: pressing it fires its actions;
+  // it becomes pressable again as soon as those actions finish playing (no
+  // fixed cooldown to configure). "Retour au point de départ" optionally
+  // returns whatever it moved back to where it started, either immediately
+  // once the actions finish or on the button's next press. "Boucle infinie"
+  // instead turns one press into a self-repeating cycle forever.
   _checkButtons() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.BUTTON) continue;
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
       const overlapping = this._overlap(p, box);
-      if (overlapping && !rt.wasOverlapping && this.simTime >= rt.buttonReadyAt) {
-        this._fireTrigger(rt);
-        sfx.button();
-        const cooldown = Math.max(0.05, (rt.def.props && rt.def.props.cooldown) ?? 1);
-        rt.buttonReadyAt = this.simTime + cooldown;
+      const props = rt.def.props || {};
+      if (overlapping && !rt.wasOverlapping && rt.buttonReady) {
+        const resetMode = props.resetAfterActions || 'none';
+        if (resetMode === 'onNextPress' && rt.awaitingReset) {
+          this._revertButtonTargets(rt);
+          rt.awaitingReset = false;
+          sfx.button();
+        } else if (props.loop) {
+          this._fireLoop(rt);
+          sfx.button();
+        } else {
+          this._fireTrigger(rt);
+          sfx.button();
+          rt.buttonReady = false;
+          const finishAt = this._actionsFinishTime(rt);
+          if (resetMode === 'afterActions') {
+            this.scheduled.push({ time: finishAt, run: () => { this._revertButtonTargets(rt); rt.buttonReady = true; } });
+          } else if (resetMode === 'onNextPress') {
+            this.scheduled.push({ time: finishAt, run: () => { rt.awaitingReset = true; rt.buttonReady = true; } });
+          } else {
+            this.scheduled.push({ time: finishAt, run: () => { rt.buttonReady = true; } });
+          }
+        }
       }
       rt.wasOverlapping = overlapping;
     }
   }
 
-  // Fires the trigger's action list once, then re-schedules itself after
-  // `loopInterval` seconds — an autonomous, self-repeating behaviour (e.g.
-  // "go left 3 cells, wait 1s, come back, wait 2s...") that keeps running
-  // without the player needing to re-enter the zone. Cleared automatically
-  // on death/reset because `this.scheduled` is wiped there.
-  _startLoop(triggerRt) {
-    const interval = Math.max(0.2, (triggerRt.def.props && triggerRt.def.props.loopInterval) || 2);
-    const run = () => {
-      this._fireTrigger(triggerRt);
-      this.scheduled.push({ time: this.simTime + interval, run });
+  // A pressure plate repeats its actions for as long as the player stays on
+  // it (one cycle right away, then again every time the previous cycle
+  // finishes), stopping the moment they step off — unless "boucle infinie"
+  // is set, in which case one press starts a cycle that never stops.
+  _checkPlates() {
+    const p = this.player;
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.PLATE) continue;
+      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      const overlapping = this._overlap(p, box);
+      if (overlapping && !rt.wasOverlapping) {
+        if (rt.def.props && rt.def.props.loop) this._fireLoop(rt);
+        else this._startHold(rt);
+      }
+      if (!overlapping) rt.holding = false;
+      rt.wasOverlapping = overlapping;
+    }
+  }
+
+  _startHold(rt) {
+    if (rt.holding) return;
+    rt.holding = true;
+    const cycle = () => {
+      if (!rt.holding) return;
+      this._fireTrigger(rt);
+      const span = Math.max(0.1, this._actionsSpan(rt));
+      this.scheduled.push({ time: this.simTime + span, run: cycle });
     };
-    run();
+    cycle();
+  }
+
+  // Starts a self-repeating "boucle infinie" cycle (shared by trigger/button/
+  // plate) — fires the action list, waits for it to finish, fires it again,
+  // forever. Guarded by `looping` so re-entering/re-pressing doesn't stack
+  // multiple concurrent cycles.
+  _fireLoop(rt) {
+    if (rt.looping) return;
+    rt.looping = true;
+    const cycle = () => {
+      this._fireTrigger(rt);
+      const span = Math.max(0.1, this._actionsSpan(rt));
+      this.scheduled.push({ time: this.simTime + span, run: cycle });
+    };
+    cycle();
+  }
+
+  // Total time (seconds, relative to "now") the action list takes to fully
+  // play out — the longest delay+duration among its actions — used to know
+  // when a button becomes pressable again, when to loop/repeat next, and
+  // where to schedule a "revert to start" once actions finish.
+  _actionsSpan(rt) {
+    const actions = (rt.def.props && rt.def.props.actions) || [];
+    let span = 0;
+    for (const a of actions) {
+      const dur = a.type === ACTION_TYPES.MOVE_ELEMENT ? Math.max(0.05, a.params.duration || 0.5) : 0;
+      span = Math.max(span, (a.delay || 0) + dur);
+    }
+    return span;
+  }
+
+  _actionsFinishTime(rt) {
+    return this.simTime + this._actionsSpan(rt);
+  }
+
+  // Animates every element this button's moveElement actions targeted back
+  // to its authored starting position ("retour au point de départ").
+  _revertButtonTargets(rt) {
+    const actions = (rt.def.props && rt.def.props.actions) || [];
+    const seen = new Set();
+    for (const a of actions) {
+      if (a.type !== ACTION_TYPES.MOVE_ELEMENT || !a.targetId || seen.has(a.targetId)) continue;
+      seen.add(a.targetId);
+      const target = this.runtime.get(a.targetId);
+      if (!target) continue;
+      target.anim = {
+        fromX: target.x, fromY: target.y,
+        toX: target.def.x * CELL, toY: target.def.y * CELL,
+        startTime: this.simTime,
+        duration: 0.4,
+      };
+    }
   }
 
   _fireTrigger(triggerRt) {
@@ -536,67 +656,69 @@ export class Engine {
   _runAction(action) {
     const p = this.player;
     const target = action.targetId === 'player' ? null : this.runtime.get(action.targetId);
+    const params = action.params || {};
     switch (action.type) {
       case ACTION_TYPES.MOVE_ELEMENT: {
         if (!target) return;
-        const dx = (action.params.dx || 0) * CELL;
-        const dy = (action.params.dy || 0) * CELL;
+        // Axe X : +1 = droite, -1 = gauche. Axe Y : +1 = monte, -1 = descend
+        // (inversé par rapport à l'axe écran, où y grandit vers le bas).
+        const dx = (params.axisX || 0) * CELL;
+        const dy = -(params.axisY || 0) * CELL;
         target.anim = {
           fromX: target.x, fromY: target.y,
           toX: target.x + dx, toY: target.y + dy,
           startTime: this.simTime,
-          duration: Math.max(0.05, action.params.duration || 0.5),
+          duration: Math.max(0.05, params.duration || 0.5),
         };
         break;
       }
       case ACTION_TYPES.TELEPORT: {
         if (action.targetId === 'player') {
-          p.x = action.params.x * CELL; p.y = action.params.y * CELL;
+          p.x = params.x * CELL; p.y = params.y * CELL;
         } else if (target) {
-          target.x = action.params.x * CELL; target.y = action.params.y * CELL;
+          target.x = params.x * CELL; target.y = params.y * CELL;
           target.anim = null;
         }
         break;
       }
       case ACTION_TYPES.SET_STATE: {
         if (target) {
-          const params = action.params || {};
           if ('passable' in params) target.passable = !!params.passable;
           if ('invisible' in params) target.invisible = !!params.invisible;
           if ('harmless' in params) target.harmless = !!params.harmless;
         }
         break;
       }
-      case ACTION_TYPES.SET_GRAVITY: {
-        p.gravityDir = action.params.direction;
+      case ACTION_TYPES.SET_WORLD_STATE: {
+        if ('gravityScale' in params) this.level.gravityScale = params.gravityScale;
+        if ('background' in params) this.level.background = params.background;
         break;
       }
-      case ACTION_TYPES.INVERT_CONTROLS: {
-        const axis = action.params.axis || 'horizontal';
-        const enabled = action.params.enabled !== false;
-        if (axis === 'both') { p.invert.horizontal = enabled; p.invert.vertical = enabled; }
-        else p.invert[axis] = enabled;
-        if (action.params.duration) {
-          setTimeout(() => {
-            if (axis === 'both') { p.invert.horizontal = false; p.invert.vertical = false; }
-            else p.invert[axis] = false;
-          }, action.params.duration * 1000);
+      case ACTION_TYPES.SET_PLAYER_STATE: {
+        if ('gravity' in params) p.gravityDir = params.gravity;
+        if ('invert' in params) {
+          const axis = params.invert;
+          if (axis === 'both') { p.invert.horizontal = true; p.invert.vertical = true; }
+          else p.invert[axis] = true;
+          const dur = params.invertDuration || 0;
+          if (dur) {
+            setTimeout(() => {
+              if (axis === 'both') { p.invert.horizontal = false; p.invert.vertical = false; }
+              else p.invert[axis] = false;
+            }, dur * 1000);
+          }
         }
-        break;
-      }
-      case ACTION_TYPES.SET_JUMP_POWER: {
-        p.jumpMult = action.params.value;
-        if (action.params.duration) setTimeout(() => { p.jumpMult = 1; }, action.params.duration * 1000);
-        break;
-      }
-      case ACTION_TYPES.SET_SPEED: {
-        p.speedMult = action.params.value;
-        if (action.params.duration) setTimeout(() => { p.speedMult = 1; }, action.params.duration * 1000);
-        break;
-      }
-      case ACTION_TYPES.SHAKE_CAMERA: {
-        const params = action.params || {};
-        this._triggerShake(params.magnitude || 10, params.duration || 0.3);
+        if ('invisible' in params) p.invisible = !!params.invisible;
+        if ('jumpMult' in params) {
+          p.jumpMult = params.jumpMult;
+          const dur = params.statDuration || 0;
+          if (dur) setTimeout(() => { p.jumpMult = 1; }, dur * 1000);
+        }
+        if ('speedMult' in params) {
+          p.speedMult = params.speedMult;
+          const dur = params.statDuration || 0;
+          if (dur) setTimeout(() => { p.speedMult = 1; }, dur * 1000);
+        }
         break;
       }
       default: break;
@@ -617,7 +739,7 @@ export class Engine {
   // ---------------------------------------------------------------- render
   render() {
     const ctx = this.ctx, cv = this.canvas;
-    ctx.fillStyle = '#1b1e2b';
+    ctx.fillStyle = this.level.background || '#1b1e2b';
     ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.save();
     let shakeX = 0, shakeY = 0;
@@ -642,11 +764,28 @@ export class Engine {
       }
     }
 
+    // Cell-occupancy lookup for BLOCK entities, rebuilt each frame (cheap —
+    // levels are at most 80x30 cells) so adjacent blocks — whether one wide
+    // authored entity or several separately-placed 1x1 ones — render as one
+    // seamless mass with no visible seam between them.
+    this._blockCells = this._buildBlockCellSet();
+
     for (const rt of this.runtime.values()) this._renderEntity(rt);
     this._renderPlayer();
     this.particles.render(ctx);
 
     ctx.restore();
+  }
+
+  _buildBlockCellSet() {
+    const set = new Set();
+    for (const rt of this.runtime.values()) {
+      if (rt.def.type !== ENTITY_TYPES.BLOCK) continue;
+      for (let i = 0; i < rt.def.w; i++) {
+        for (let j = 0; j < rt.def.h; j++) set.add(`${rt.def.x + i},${rt.def.y + j}`);
+      }
+    }
+    return set;
   }
 
   _renderEntity(rt) {
@@ -660,22 +799,41 @@ export class Engine {
     ctx.save();
     switch (rt.def.type) {
       case ENTITY_TYPES.BLOCK: {
-        const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
-        grad.addColorStop(0, '#2c2f42'); grad.addColorStop(0.5, '#181a26'); grad.addColorStop(1, '#0e0f16');
-        ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
-        ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(rt.x, rt.y, w, 3);
-        ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(rt.x, rt.y + h - 3, w, 3);
-        ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
-        ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
-        // mortar seams between authored cells, for a brick/block feel on wide runs
-        ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-        for (let i = 1; i < rt.def.w; i++) { ctx.beginPath(); ctx.moveTo(rt.x + i * CELL, rt.y + 3); ctx.lineTo(rt.x + i * CELL, rt.y + h - 3); ctx.stroke(); }
-        for (let j = 1; j < rt.def.h; j++) { ctx.beginPath(); ctx.moveTo(rt.x + 3, rt.y + j * CELL); ctx.lineTo(rt.x + w - 3, rt.y + j * CELL); ctx.stroke(); }
+        // Rendered per-cell (not as one wide rect) so neighboring BLOCK cells
+        // — from this entity or any other — merge into one seamless mass:
+        // only the exposed (non-adjacent) edges of each cell get an outline.
+        const cells = this._blockCells;
+        for (let i = 0; i < rt.def.w; i++) {
+          for (let j = 0; j < rt.def.h; j++) {
+            const cx = rt.def.x + i, cy = rt.def.y + j;
+            const px = rt.x + i * CELL, py = rt.y + j * CELL;
+            const hasUp = cells.has(`${cx},${cy - 1}`);
+            const hasDown = cells.has(`${cx},${cy + 1}`);
+            const hasLeft = cells.has(`${cx - 1},${cy}`);
+            const hasRight = cells.has(`${cx + 1},${cy}`);
+            const grad = ctx.createLinearGradient(px, py, px, py + CELL);
+            grad.addColorStop(0, '#2c2f42'); grad.addColorStop(0.5, '#181a26'); grad.addColorStop(1, '#0e0f16');
+            ctx.fillStyle = grad; ctx.fillRect(px, py, CELL, CELL);
+            if (!hasUp) { ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(px, py, CELL, 3); }
+            if (!hasDown) { ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(px, py + CELL - 3, CELL, 3); }
+            ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
+            ctx.beginPath();
+            if (!hasUp) { ctx.moveTo(px, py + 0.5); ctx.lineTo(px + CELL, py + 0.5); }
+            if (!hasDown) { ctx.moveTo(px, py + CELL - 0.5); ctx.lineTo(px + CELL, py + CELL - 0.5); }
+            if (!hasLeft) { ctx.moveTo(px + 0.5, py); ctx.lineTo(px + 0.5, py + CELL); }
+            if (!hasRight) { ctx.moveTo(px + CELL - 0.5, py); ctx.lineTo(px + CELL - 0.5, py + CELL); }
+            ctx.stroke();
+          }
+        }
         break;
       }
       case ENTITY_TYPES.PLATFORM: {
+        const custom = rt.def.props && rt.def.props.color;
+        const c0 = custom ? shadeColor(custom, 25) : '#5b93ee';
+        const c1 = custom || '#2d6cdf';
+        const c2 = custom ? shadeColor(custom, -35) : '#1a4bb0';
         const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
-        grad.addColorStop(0, '#5b93ee'); grad.addColorStop(0.5, '#2d6cdf'); grad.addColorStop(1, '#1a4bb0');
+        grad.addColorStop(0, c0); grad.addColorStop(0.5, c1); grad.addColorStop(1, c2);
         ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
         ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(rt.x, rt.y, w, 3);
         ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
@@ -830,13 +988,14 @@ export class Engine {
           ctx.strokeStyle = 'rgba(255,255,0,0.6)';
           ctx.fillRect(rt.x, rt.y, w, h);
           ctx.strokeRect(rt.x, rt.y, w, h);
+          if (rt.def.props && rt.def.props.loop) { ctx.font = '10px sans-serif'; ctx.fillStyle = '#ffff88'; ctx.textAlign = 'center'; ctx.fillText('∞', rt.x + w / 2, rt.y + h / 2 + 3); }
         }
         break;
       case ENTITY_TYPES.BUTTON: {
         // A button is deliberately visible (unlike a trigger) so the player
         // can tell it's there and understand it can be pressed again once
-        // its cooldown has elapsed.
-        const cooling = this.simTime < rt.buttonReadyAt;
+        // its actions have finished playing.
+        const cooling = !rt.buttonReady;
         const housingGrad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
         housingGrad.addColorStop(0, '#383c52'); housingGrad.addColorStop(1, '#22242f');
         ctx.fillStyle = housingGrad; ctx.fillRect(rt.x, rt.y, w, h);
@@ -851,10 +1010,20 @@ export class Engine {
         ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(rt.x + w * 0.18, rt.y + h - padH - h * 0.12, w * 0.64, padH);
         break;
       }
-      case ENTITY_TYPES.DECOR: {
-        const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
-        grad.addColorStop(0, '#5c6088'); grad.addColorStop(1, '#3a3d57');
-        ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
+      case ENTITY_TYPES.PLATE: {
+        // A pressure plate sits flush and low, and visibly compresses while
+        // the player is standing on it (rt.holding / rt.looping).
+        const pressed = rt.holding || rt.looping;
+        const plateH = pressed ? h * 0.18 : h * 0.28;
+        const grad = ctx.createLinearGradient(rt.x, rt.y + h - plateH, rt.x, rt.y + h);
+        grad.addColorStop(0, pressed ? '#ffe08a' : '#c98a2b');
+        grad.addColorStop(1, pressed ? '#ff9f1c' : '#7a531a');
+        ctx.fillStyle = grad;
+        ctx.fillRect(rt.x + 3, rt.y + h - plateH, w - 6, plateH);
+        ctx.strokeStyle = 'rgba(0,0,0,0.35)'; ctx.lineWidth = 1.5;
+        ctx.strokeRect(rt.x + 3, rt.y + h - plateH, w - 6, plateH);
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.beginPath(); ctx.moveTo(rt.x + 5, rt.y + h - plateH + 2); ctx.lineTo(rt.x + w - 5, rt.y + h - plateH + 2); ctx.stroke();
         break;
       }
     }
@@ -862,6 +1031,7 @@ export class Engine {
   }
 
   _renderPlayer() {
+    if (this.player.invisible && !this.debugTriggers) return;
     const ctx = this.ctx, p = this.player;
     const troll = p.invert.horizontal || p.invert.vertical;
     ctx.save();
@@ -922,6 +1092,17 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
+}
+
+// Lightens (positive percent) or darkens (negative) a "#rrggbb" color —
+// used to derive a platform's highlight/shadow gradient stops from a single
+// author-picked base color.
+function shadeColor(hex, percent) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  const amt = Math.round(2.55 * percent);
+  let r = (n >> 16) + amt, g = (n >> 8 & 0x00ff) + amt, b = (n & 0x0000ff) + amt;
+  r = Math.max(0, Math.min(255, r)); g = Math.max(0, Math.min(255, g)); b = Math.max(0, Math.min(255, b));
+  return `#${(1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1)}`;
 }
 
 // Draws a row (or column, for left/right-facing) of triangular spikes so the

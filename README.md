@@ -1,27 +1,45 @@
 # Level Devil — jeu + éditeur + niveaux communautaires
 
-Un jeu de plateforme façon **Level Devil** : blocs, pointes orientables,
-ressorts (haut/bas), ventilateurs (vent continu gauche/droite/haut/bas),
-roues tournantes, téléporteurs liés par fréquence, plateformes mobiles, des
-**triggers** invisibles et des **boutons** visibles/répétables qui
-déclenchent des pièges (déplacements en série, boucles autonomes,
-changement d'état d'un élément — traversable / invisible / inoffensif —,
-inversion de la gravité, inversion des touches façon troll, changement de
-puissance de saut...). Une mort remet tout le niveau à zéro (triggers,
-positions, états) sauf le dernier checkpoint atteint.
+Un jeu de plateforme façon **Level Devil** : blocs (posés case par case et
+assemblés sans jointure visible), pointes orientables (« inoffensif » = on
+peut les toucher sans mourir, « traversable » = on les traverse carrément),
+ressorts (haut/bas), ventilateurs à **portée réglable** (nombre de cases
+touchées par l'air, avec une diminution optionnelle de la force selon la
+distance, et un effet de **particules de vent**), roues tournantes,
+téléporteurs liés par fréquence (le « sens unique » s'applique à toute la
+fréquence d'un coup, sans possibilité de faire demi-tour), plateformes
+mobiles personnalisables en couleur, une **plaque de pression** (répète ses
+actions tant que le joueur reste dessus), des **triggers** invisibles (se
+déclenchent en entrant dans leur zone) et des **boutons** visibles
+(redeviennent pressables dès que leurs actions sont terminées, avec un
+retour optionnel des éléments déplacés à leur point de départ). Trigger,
+bouton et plaque peuvent tous les trois être mis en **boucle infinie**. Une
+mort remet tout le niveau à zéro (triggers, positions, états) sauf le
+dernier checkpoint atteint.
+
+Chaque trigger/bouton/plaque déclenche une liste d'actions parmi exactement
+cinq types : **déplacer un élément** (Axe X : +1 droite / -1 gauche, Axe Y :
++1 monte / -1 descend — jamais le joueur, c'est le rôle du téléporteur),
+**téléporter un élément** (ou le joueur), **changer l'état du monde**
+(gravité, fond d'écran — jamais la taille de la grille), **changer l'état
+d'un élément** (traversable / invisible / inoffensif) et **changer l'état du
+joueur** (gravité, touches inversées façon troll, visibilité, puissance de
+saut/déplacement). Le point de départ du joueur a lui-même un état
+configurable : centre de gravité au spawn et visibilité (même invisible, le
+son et les particules restent actifs).
 
 La roue tournante (spinner) a une **hitbox circulaire** (et non plus son
 simple carré englobant), et chaque action de jeu a un petit **effet sonore
 synthétisé** (saut, atterrissage, mort, victoire, checkpoint, téléporteur,
 ressort, bouton — aucun fichier audio externe, tout est généré à la volée
 avec la Web Audio API) accompagné de **particules** (poussière aux pieds,
-explosion à la mort, confettis à la victoire) et d'un léger **tremblement de
-caméra** à la mort. Le son est réglable (muet + volume) et sauvegardé dans
-le navigateur.
+explosion à la mort, confettis à la victoire, vent du ventilateur) et d'un
+léger **tremblement de caméra** à la mort. Le son est réglable (muet +
+volume) et sauvegardé dans le navigateur.
 
-Inclut un éditeur de niveaux complet (avec une **zone éditable** définie par
-des bornes colonnes/lignes toujours actives — pratique pour protéger un
-cadre décoratif sans y toucher par erreur —, et une bascule vue debug / vue
+Inclut un éditeur de niveaux complet (grille dont seules les colonnes
+9-80 et les lignes 9-30 sont modifiables — toute la zone est toujours
+éditable, plus de bornes séparées à gérer —, et une bascule vue debug / vue
 réelle en playtest), des **comptes joueurs** (Supabase Auth, via une
 **fenêtre modale** de connexion/inscription) pour publier sous son vrai nom
 et gérer (modifier/supprimer) ses propres niveaux, un système de **likes**,
@@ -38,8 +56,10 @@ d'un signalement…) et **notifications toast** discrètes en bas à droite
 remplacent partout `alert()` / `confirm()` / `prompt()`. La page d'accueil
 présente les niveaux sous forme de **cartes** (au lieu de tableaux) avec
 leurs stats en un coup d'œil, et l'éditeur regroupe la taille de la grille
-et la zone éditable dans un petit panneau « ⚙ Niveau » séparé, pour garder
-la barre d'outils dégagée.
+et la « condition du monde » (gravité, fond d'écran) dans un petit panneau
+« 🌍 Condition du monde » séparé, pour garder la barre d'outils dégagée. Les
+liens entre un trigger/bouton/plaque et ses cibles ne s'affichent sur la
+grille que lorsque cet élément est sélectionné.
 Aucune étape de build : ce sont des fichiers HTML/CSS/JS statiques. Ce
 dépôt est prêt à être hébergé à la fois sur **GitHub Pages** et sur un
 **Cloudflare Worker** (Static Assets) — les deux servent exactement les
