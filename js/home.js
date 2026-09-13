@@ -34,15 +34,15 @@ function levelRow(lvl) {
   // A like is capped at one per account — once liked, the button just shows
   // that instead of allowing another click.
   const alreadyLiked = likedLevelIds.has(lvl.id);
-  const likeBtn = `<button class="btn small" data-like="${lvl.id}" ${alreadyLiked ? 'disabled' : ''}>${alreadyLiked ? '❤ Déjà liké' : '❤ Liker'}</button>`;
+  const likeBtn = `<button class="btn small" data-like="${lvl.id}" ${alreadyLiked ? 'disabled' : ''}>${alreadyLiked ? '💖 Déjà liké' : '💖 Liker'}</button>`;
   return `
     <div class="level-card${lvl.approved ? ' official' : ''}" data-id="${lvl.id}">
       <div class="lc-title">${escapeHtml(lvl.title)}${lvl.approved ? ' <span class="pill" title="Partie officielle">🏅 officiel</span>' : ''}</div>
       <div class="lc-author">par ${escapeHtml(lvl.author) || '—'}</div>
       <div class="lc-stats">
         <span title="Parties jouées">🎮 ${lvl.plays}</span>
-        <span title="Victoires">🏁 ${lvl.wins}</span>
-        <span title="Likes">❤ ${lvl.likes ?? 0}</span>
+        <span title="Victoires">🏆 ${lvl.wins}</span>
+        <span title="Likes">💖 ${lvl.likes ?? 0}</span>
       </div>
       ${approvalNote}
       <div class="lc-actions">
@@ -153,8 +153,8 @@ async function refreshMyLevels() {
       <div class="lc-title">${escapeHtml(lvl.title)}${lvl.approved ? ' <span class="pill">🏅 officiel</span>' : ''}</div>
       <div class="lc-stats">
         <span title="Parties jouées">🎮 ${lvl.plays}</span>
-        <span title="Victoires">🏁 ${lvl.wins}</span>
-        <span title="Likes">❤ ${lvl.likes ?? 0}</span>
+        <span title="Victoires">🏆 ${lvl.wins}</span>
+        <span title="Likes">💖 ${lvl.likes ?? 0}</span>
       </div>
       <div class="lc-actions">
         <a class="btn small accent" href="game.html?id=${lvl.id}">▶ Jouer</a>
