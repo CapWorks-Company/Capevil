@@ -72,6 +72,7 @@ const colsInput = document.getElementById('cols-input');
 const rowsInput = document.getElementById('rows-input');
 const worldGravityInput = document.getElementById('ws-gravity');
 const worldBgInput = document.getElementById('ws-bg');
+const ceilingGlitchInput = document.getElementById('ws-ceiling-glitch');
 const statusEl = document.getElementById('status-msg');
 const pickBanner = document.getElementById('pick-banner');
 
@@ -180,6 +181,7 @@ function syncHeaderInputs() {
   rowsInput.value = level.rows;
   if (worldGravityInput) worldGravityInput.value = level.gravityScale ?? 1;
   if (worldBgInput) worldBgInput.value = level.background || '#1b1e2b';
+  if (ceilingGlitchInput) ceilingGlitchInput.checked = !!level.ceilingJumpGlitch;
   updateLevelSettingsLabel();
   updatePublishButtonState();
 }
@@ -1060,6 +1062,9 @@ function bindToolbar() {
   if (worldBgInput) worldBgInput.addEventListener('input', () => {
     level.background = worldBgInput.value || '#1b1e2b';
     render();
+  });
+  if (ceilingGlitchInput) ceilingGlitchInput.addEventListener('change', () => {
+    level.ceilingJumpGlitch = ceilingGlitchInput.checked;
   });
 
   document.getElementById('new-level').addEventListener('click', async () => {

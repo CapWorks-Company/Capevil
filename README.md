@@ -42,6 +42,15 @@ marchant dedans (bloqué net s'il n'y a pas la place). Un cube posé sur une
 quoi bâtir des casse-têtes de poids/pression sans avoir besoin du joueur
 lui-même sur la plaque.
 
+Sauter et se cogner la tête contre un plafond (ou un mur, selon le sens de
+la gravité) ne permet plus de resauter aussitôt : seul un vrai atterrissage
+**dans le sens de la gravité** (tomber sur un sol, pas percuter un plafond en
+sautant dedans) remet le joueur au sol. Ce comportement — rester « collé » au
+plafond et pouvoir sauter à l'infini en le tenant enfoncé — reste disponible
+**volontairement** comme mécanique de niveau via la case à cocher **« Glitch
+du plafond (saut infini) »**, désactivée par défaut, dans le panneau
+« 🌍 Condition du monde ».
+
 Pendant l'édition d'une action **« Téléporter un élément »**, cliquer dans
 l'un des champs x/y affiche les coordonnées **(x, y) de chaque case** de la
 grille en surimpression, pour repérer précisément où téléporter sans avoir à

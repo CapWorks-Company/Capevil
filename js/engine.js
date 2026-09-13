@@ -556,19 +556,34 @@ export class Engine {
   }
 
   _resolveAxis(p, rects, axis, g) {
+    // Historical bug ("glitch du plafond"): grounding used to be granted for
+    // ANY collision on the gravity-aligned axis, without checking which side
+    // it happened on — so jumping up and bonking your head on a ceiling
+    // block (moving AGAINST gravity) counted the exact same as landing on a
+    // floor (moving WITH gravity), letting you jump again immediately and
+    // spam-jump forever stuck against the ceiling. Fixed by default: only a
+    // collision on the side gravity actually presses the player into counts
+    // as grounded. `ceilingJumpGlitch` lets a level author opt back into the
+    // old buggy behavior on purpose, as a mechanic.
+    const glitchOn = !!(this.level && this.level.ceilingJumpGlitch);
     for (const r of rects) {
       if (!this._overlap(p, r)) continue;
+      let vSign = 0;
       if (axis === 'x') {
+        vSign = p.vx > 0 ? 1 : (p.vx < 0 ? -1 : 0);
         if (p.vx > 0) p.x = r.x - p.w;
         else if (p.vx < 0) p.x = r.x + r.w;
         p.vx = 0;
       } else {
+        vSign = p.vy > 0 ? 1 : (p.vy < 0 ? -1 : 0);
         if (p.vy > 0) p.y = r.y - p.h;
         else if (p.vy < 0) p.y = r.y + r.h;
         p.vy = 0;
       }
-      // grounded if the collision happened against the side gravity pushes into
-      const pushingInto = (axis === 'x' && g.x !== 0) || (axis === 'y' && g.y !== 0);
+      const gravitySign = axis === 'x' ? Math.sign(g.x) : Math.sign(g.y);
+      const pushingInto = glitchOn
+        ? gravitySign !== 0
+        : (gravitySign !== 0 && vSign === gravitySign);
       if (pushingInto) {
         p.onGround = true;
         // Conveyor behaviour: carry the player along with a moving platform

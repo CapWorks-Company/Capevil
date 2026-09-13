@@ -24,6 +24,14 @@ export function createEmptyLevel(title = 'Nouveau niveau') {
     // the "Changer l'état du monde" action (grid size excepted, obviously).
     gravityScale: 1,
     background: '#1b1e2b',
+    // Authored-only (not live-changeable via an action, unlike the two
+    // above): whether jumping into a solid against the direction gravity
+    // pulls (bonking your head on a ceiling, normally) incorrectly counts as
+    // landing — the historical physics bug that let you spam-jump forever
+    // stuck against a ceiling/wall. Off by default (bug fixed); a level
+    // author can opt back into the old buggy behavior on purpose as a
+    // mechanic (see engine.js's _resolveAxis).
+    ceilingJumpGlitch: false,
     createdAt: null,
     updatedAt: null,
   };
@@ -305,6 +313,7 @@ export function normalizeLevel(rawLevel) {
   level.playerStart.invisible = !!level.playerStart.invisible;
   level.gravityScale = Number.isFinite(level.gravityScale) ? level.gravityScale : 1;
   level.background = level.background || '#1b1e2b';
+  level.ceilingJumpGlitch = !!level.ceilingJumpGlitch;
   return level;
 }
 
