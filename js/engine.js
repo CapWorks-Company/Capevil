@@ -9,6 +9,15 @@ import { loadKeybinds, buildKeyMap } from './keybindings.js';
 import { sfx, unlockAudio } from './audio-fx.js';
 import { ParticleSystem } from './particles.js';
 
+// Cheap ease-in-out used purely for the goal door's leaf motion (see the
+// GOAL render case) — real doors accelerate off their rest position and
+// decelerate into the seal instead of gliding at one constant speed the
+// whole way. Doesn't touch `doorProgress` itself (that stays linear — it's
+// what drives winLevel()'s timing), only how it's mapped for drawing.
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
 export class Engine {
   constructor(canvas, level, { onDeath, onWin, onStateChange } = {}) {
     this.canvas = canvas;
@@ -106,6 +115,7 @@ export class Engine {
         closing: false,
         closeStart: 0,
         doorProgress: 0,
+        sealed: false, // set once, the instant the door fully seals — see _updateDoors
         // (fan only) fixed-rate ambient/push wind-particle emitters — see _applyFans
         windAccum: 0,
         pushWindAccum: 0,
@@ -152,7 +162,7 @@ export class Engine {
       rt.anim = null; rt.dx = 0; rt.dy = 0; rt.angle = 0;
       rt.wasOverlapping = false; rt.usedOnce = false;
       rt.looping = false; rt.holding = false; rt.buttonReady = true; rt.awaitingReset = false; rt.reversed = false;
-      rt.closing = false; rt.closeStart = 0; rt.doorProgress = 0;
+      rt.closing = false; rt.closeStart = 0; rt.doorProgress = 0; rt.sealed = false;
       rt.vy = 0;
       if (def.type !== ENTITY_TYPES.CHECKPOINT) rt.activated = false;
     }
@@ -243,6 +253,13 @@ export class Engine {
       if (rt.def.type !== ENTITY_TYPES.GOAL || !rt.closing) continue;
       const t = Math.min(1, (this.simTime - rt.closeStart) / DOOR_CLOSE_DURATION);
       rt.doorProgress = t;
+      if (t >= 1 && !rt.sealed) {
+        // The mechanical "clunk" as the two leaves meet and the bolt drives
+        // home — fires exactly once, a beat before winLevel()'s own fanfare.
+        rt.sealed = true;
+        sfx.doorSeal();
+        this._triggerShake(4, 0.18);
+      }
       if (t >= 1) this.winLevel();
     }
   }
@@ -1028,8 +1045,17 @@ export class Engine {
     // seamless mass with no visible seam between them.
     this._blockCells = this._buildBlockCellSet();
 
-    for (const rt of this.runtime.values()) this._renderEntity(rt);
+    // Entities can be assigned a purely cosmetic paint-order layer (see
+    // constants.js's LAYERS) so a level author can tuck decoration behind
+    // blocks or float something in front of the player — collision/hazards/
+    // scripting are completely untouched by this, only draw order changes.
+    // A stable sort keeps every layer-0 entity in its original relative
+    // order (matching the pre-layers single-pass draw exactly), and splits
+    // around the player so layer<=0 draws behind them, layer>0 in front.
+    const sorted = Array.from(this.runtime.values()).sort((a, b) => (a.def.layer || 0) - (b.def.layer || 0));
+    for (const rt of sorted) { if ((rt.def.layer || 0) <= 0) this._renderEntity(rt); }
     this._renderPlayer();
+    for (const rt of sorted) { if ((rt.def.layer || 0) > 0) this._renderEntity(rt); }
     this.particles.render(ctx);
 
     ctx.restore();
@@ -1245,40 +1271,100 @@ export class Engine {
         break;
       }
       case ENTITY_TYPES.GOAL: {
-        // A blue doorway: open (a sliver of door pinned to the frame's left
-        // edge, dark inside) until the player walks in, then the panel
-        // slides across to seal it — see _startDoorClose/_updateDoors.
-        const progress = rt.doorProgress || 0; // 0 = open, 1 = fully closed
+        // A recessed sci-fi/vault-style doorway with two fixed-width metal
+        // leaves (like an elevator/blast door) that retract into pockets on
+        // either side of the frame when open, and slide inward at constant
+        // width to meet flush in the middle when the player walks in — see
+        // _startDoorClose/_updateDoors. `doorProgress` itself stays linear
+        // (it drives winLevel()'s timing), so only its drawing here is eased
+        // for a more natural accelerate-then-settle motion.
+        const progress = rt.doorProgress || 0; // 0 = open, 1 = fully sealed
+        const visual = easeInOutCubic(progress);
         const insetX = Math.max(2, w * 0.08), insetY = Math.max(2, h * 0.04);
+
+        // Recessed frame: a beveled sunken border (light top-left, dark
+        // bottom-right) instead of a flat-filled rectangle, so the doorway
+        // reads as set INTO a wall rather than painted on top of it.
         const frameGrad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
-        frameGrad.addColorStop(0, '#22345c'); frameGrad.addColorStop(1, '#152140');
+        frameGrad.addColorStop(0, '#2a3d68'); frameGrad.addColorStop(1, '#141d38');
         ctx.fillStyle = frameGrad; ctx.fillRect(rt.x, rt.y, w, h);
-        ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 1;
-        ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
+        ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(rt.x + 0.5, rt.y + h - 0.5); ctx.lineTo(rt.x + 0.5, rt.y + 0.5); ctx.lineTo(rt.x + w - 0.5, rt.y + 0.5); ctx.stroke();
+        ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+        ctx.beginPath(); ctx.moveTo(rt.x + w - 0.5, rt.y + 0.5); ctx.lineTo(rt.x + w - 0.5, rt.y + h - 0.5); ctx.lineTo(rt.x + 0.5, rt.y + h - 0.5); ctx.stroke();
+
         const innerX = rt.x + insetX, innerY = rt.y + insetY;
         const innerW = w - insetX * 2, innerH = h - insetY;
         ctx.fillStyle = '#05060a';
         ctx.fillRect(innerX, innerY, innerW, innerH);
-        const openW = innerW * 0.16;
-        const panelW = openW + (innerW - openW) * progress;
-        const doorGrad = ctx.createLinearGradient(innerX, rt.y, innerX, rt.y + h);
-        doorGrad.addColorStop(0, '#5b93ee'); doorGrad.addColorStop(1, '#2d6cdf');
-        ctx.fillStyle = doorGrad;
-        ctx.fillRect(innerX, innerY, panelW, innerH);
-        ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1;
-        ctx.strokeRect(innerX + 0.5, innerY + 0.5, Math.max(0, panelW - 1), innerH - 1);
-        // a small handle/rivet, visible once the door is mostly shut
-        if (progress > 0.4) {
-          ctx.fillStyle = 'rgba(255,255,255,0.55)';
-          ctx.beginPath(); ctx.arc(innerX + panelW - Math.max(4, w * 0.1), innerY + innerH * 0.55, Math.max(1.5, w * 0.035), 0, Math.PI * 2); ctx.fill();
-        }
-        // a soft glow from the still-open gap, fading out as it closes
-        if (progress < 1) {
-          const gap = innerW - panelW;
-          if (gap > 0.5) {
-            ctx.fillStyle = `rgba(120,190,255,${0.25 * (1 - progress)})`;
-            ctx.fillRect(innerX + panelW, innerY, gap, innerH);
+
+        // a bright threshold plate along the bottom of the opening
+        const sillH = Math.max(1.5, h * 0.035);
+        ctx.fillStyle = 'rgba(180,205,255,0.35)';
+        ctx.fillRect(innerX, innerY + innerH - sillH, innerW, sillH);
+
+        // Two fixed-width leaves sliding from each pocket toward the center.
+        // At progress=0 each leaf is tucked almost entirely into its side
+        // wall (only a sliver shows, hinting it's ready to slide); at
+        // progress=1 they meet exactly in the middle with no gap.
+        const halfW = innerW / 2;
+        const restShow = halfW * 0.14; // sliver still visible when fully open
+        const travel = halfW - restShow;
+        const leafW = halfW; // constant width the whole time — a rigid leaf, not a stretching curtain
+        const leftLeafX = innerX - (halfW - restShow) + travel * visual;
+        const rightLeafX = innerX + innerW - restShow - travel * visual;
+
+        const drawLeaf = (leafX, mirrored) => {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(innerX, innerY, innerW, innerH);
+          ctx.clip(); // never spill past the doorway opening
+          const grad = ctx.createLinearGradient(leafX, 0, leafX + leafW, 0);
+          if (mirrored) {
+            grad.addColorStop(0, '#2d6cdf'); grad.addColorStop(0.5, '#7fb0f5'); grad.addColorStop(1, '#3a78e6');
+          } else {
+            grad.addColorStop(0, '#3a78e6'); grad.addColorStop(0.5, '#7fb0f5'); grad.addColorStop(1, '#2d6cdf');
           }
+          ctx.fillStyle = grad;
+          ctx.fillRect(leafX, innerY, leafW, innerH);
+          // horizontal panel grooves for a machined-metal feel
+          ctx.strokeStyle = 'rgba(10,20,50,0.35)'; ctx.lineWidth = 1;
+          for (let g = 1; g <= 3; g++) {
+            const gy = innerY + (innerH * g) / 4;
+            ctx.beginPath(); ctx.moveTo(leafX, gy); ctx.lineTo(leafX + leafW, gy); ctx.stroke();
+          }
+          // bright bevel on the leading edge (the edge that meets the other leaf)
+          ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5;
+          const edgeX = mirrored ? leafX + 0.75 : leafX + leafW - 0.75;
+          ctx.beginPath(); ctx.moveTo(edgeX, innerY + 1); ctx.lineTo(edgeX, innerY + innerH - 1); ctx.stroke();
+          ctx.restore();
+        };
+        drawLeaf(leftLeafX, false);
+        drawLeaf(rightLeafX, true);
+
+        // a soft glow from the still-open gap between the leaves, fading out as it closes
+        if (progress < 1) {
+          const gapX = leftLeafX + leafW, gapW = rightLeafX - gapX;
+          if (gapW > 0.5) {
+            ctx.fillStyle = `rgba(120,190,255,${0.28 * (1 - visual)})`;
+            ctx.fillRect(gapX, innerY, gapW, innerH);
+          }
+        }
+
+        // Status light on the frame's lintel: red while open/closing, flips
+        // to green once the leaves have actually sealed (progress >= 1).
+        const lightX = rt.x + w / 2, lightY = rt.y + insetY * 0.55;
+        const sealed = progress >= 1;
+        ctx.fillStyle = sealed ? '#3ee06a' : '#e0463e';
+        ctx.save();
+        ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = sealed ? 6 : 3;
+        ctx.beginPath(); ctx.arc(lightX, lightY, Math.max(1.5, w * 0.03), 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+
+        // the center bolt/handle, only visible once the leaves have met
+        if (progress > 0.9) {
+          ctx.fillStyle = 'rgba(255,255,255,0.6)';
+          ctx.beginPath(); ctx.arc(innerX + innerW / 2, innerY + innerH * 0.55, Math.max(1.5, w * 0.035), 0, Math.PI * 2); ctx.fill();
         }
         break;
       }

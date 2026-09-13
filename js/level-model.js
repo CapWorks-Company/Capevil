@@ -1,5 +1,5 @@
 // Level data model: plain-JSON-serializable structures shared by the game and the editor.
-import { ENTITY_TYPES, ACTION_TYPES, DEFAULT_GRID, GRID_LIMITS, TELEPORTER_MAX_PER_FREQUENCY } from './constants.js';
+import { ENTITY_TYPES, ACTION_TYPES, DEFAULT_GRID, GRID_LIMITS, TELEPORTER_MAX_PER_FREQUENCY, clampLayer } from './constants.js';
 
 let _uidCounter = 1;
 export function uid(prefix = 'e') {
@@ -63,6 +63,9 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
     invisible: false,
     harmless: false,
     deadly: false,
+    // Purely visual paint-order layer (-2..2, 0 = default/original order) —
+    // see constants.js's LAYERS. Never affects collision/hazards/scripting.
+    layer: 0,
     props: {},
   };
   switch (type) {
@@ -213,6 +216,7 @@ export function normalizeLevel(rawLevel) {
         invisible: e.invisible ?? (legacyState === 'invisible'),
         harmless: e.harmless ?? (legacyState === 'harmless'),
         deadly: !!e.deadly,
+        layer: clampLayer(e.layer ?? 0),
         props: e.props || {},
       };
       return out;

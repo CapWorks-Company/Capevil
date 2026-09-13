@@ -114,4 +114,13 @@ export const sfx = {
   button()     { tone({ freq: 520, type: 'square', duration: 0.06, gain: 0.14 }); },
   vanish()     { tone({ freq: 900, freqEnd: 220, type: 'sine', duration: 0.22, gain: 0.14 }); noiseBurst({ duration: 0.12, gain: 0.08, filterFreq: 2200 }); },
   appear()     { tone({ freq: 220, freqEnd: 900, type: 'sine', duration: 0.22, gain: 0.14 }); noiseBurst({ duration: 0.12, gain: 0.08, filterFreq: 2200 }); },
+  // The heavy mechanical "clunk" as a goal door's two leaves meet and its
+  // bolt drives home — a low thud plus a sharper metallic knock right after,
+  // distinct from the airy teleport whoosh played when the player first
+  // steps inside and from the win jingle that follows a beat later.
+  doorSeal()   {
+    tone({ freq: 90, freqEnd: 40, type: 'sine', duration: 0.22, gain: 0.28 });
+    noiseBurst({ duration: 0.09, gain: 0.22, filterFreq: 600 });
+    tone({ freq: 260, type: 'square', duration: 0.05, gain: 0.12, delay: 0.05 });
+  },
 };

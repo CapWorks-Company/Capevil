@@ -51,6 +51,28 @@ plafond et pouvoir sauter à l'infini en le tenant enfoncé — reste disponible
 du plafond (saut infini) »**, désactivée par défaut, dans le panneau
 « 🌍 Condition du monde ».
 
+La porte de la case **« Arrivée »** (le but) a une animation plus réaliste :
+au lieu d'un simple panneau qui s'étire d'un bord à l'autre, deux battants de
+largeur fixe, façon porte de vaisseau/coffre-fort, glissent chacun depuis leur
+niche latérale et se referment au centre avec une accélération/décélération
+naturelle (au lieu d'une vitesse constante), rainures et reflets métalliques,
+un seuil lumineux au sol, et un voyant sur le linteau qui passe du rouge au
+vert **exactement** au moment où les deux battants se referment (avec un
+petit « clunk » sonore et un léger tremblement de caméra à cet instant précis,
+avant le jingle de victoire).
+
+Chaque élément peut aussi recevoir une **couche d'affichage** (« Couche »,
+dans la section « Affichage » du panneau de propriétés) pour le faire
+apparaître **derrière** ou **devant** d'autres éléments, et derrière ou
+devant le joueur — cinq niveaux, d'« Arrière-plan (tout derrière) » à
+« Premier plan (tout devant) », « Normal » restant le comportement d'origine
+par défaut. C'est **purement visuel** : quelle que soit sa couche, un élément
+continue d'interagir avec le joueur exactement comme avant (un bloc reste
+solide, un piège reste dangereux, un trigger continue de se déclencher…) —
+seul son ordre d'affichage à l'écran change, pratique pour créer de la
+profondeur (du décor à l'arrière-plan) ou masquer temporairement le joueur
+derrière un élément au premier plan.
+
 Pendant l'édition d'une action **« Téléporter un élément »**, cliquer dans
 l'un des champs x/y affiche les coordonnées **(x, y) de chaque case** de la
 grille en surimpression, pour repérer précisément où téléporter sans avoir à

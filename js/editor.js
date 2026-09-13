@@ -2,6 +2,7 @@ import {
   CELL, ENTITY_TYPES, ACTION_TYPES, GRAVITY_DIRS, GRID_LIMITS,
   ENTITY_TOGGLES, TOGGLE_LABELS, togglesForType, FACING_LABELS,
   TELEPORTER_MAX_PER_FREQUENCY, TELEPORTER_FREQUENCIES,
+  LAYERS, LAYER_LABELS, clampLayer,
 } from './constants.js';
 import {
   createEmptyLevel, createEntity, createAction, cloneLevel, findEntity,
@@ -251,7 +252,12 @@ function render() {
   for (let c = 0; c <= level.cols; c++) { ctx.beginPath(); ctx.moveTo(c * CELL, 0); ctx.lineTo(c * CELL, canvas.height); ctx.stroke(); }
   for (let r = 0; r <= level.rows; r++) { ctx.beginPath(); ctx.moveTo(0, r * CELL); ctx.lineTo(canvas.width, r * CELL); ctx.stroke(); }
 
-  for (const ent of level.entities) drawEntity(ent);
+  // Same purely-cosmetic layer split as the real game engine (see engine.js's
+  // render()): layer<=0 entities draw behind the player-start marker,
+  // layer>0 in front of it — a stable sort keeps layer-0 entities in their
+  // original order so an untouched level looks exactly as before.
+  const layerSorted = [...level.entities].sort((a, b) => (a.layer || 0) - (b.layer || 0));
+  for (const ent of layerSorted) { if ((ent.layer || 0) <= 0) drawEntity(ent); }
   drawTriggerLinks();
   if (showCoordOverlay) drawCoordOverlay();
 
@@ -261,6 +267,8 @@ function render() {
   ctx.fillRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
   ctx.strokeStyle = '#fff'; ctx.strokeRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
   if (ps.invisible) { ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('👻', ps.x * CELL + CELL / 2, ps.y * CELL + CELL / 2 + 4); }
+
+  for (const ent of layerSorted) { if ((ent.layer || 0) > 0) drawEntity(ent); }
 
   if (selectedId === 'playerstart') {
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
@@ -600,6 +608,18 @@ function renderProps() {
       </div>`);
   }
 
+  // Built from LAYERS (already back-to-front ordered) rather than via
+  // selectHtml()'s generic Object.entries(): plain-object keys that look
+  // like non-negative integers ("0","1","2") get silently hoisted before
+  // string keys ("-2","-1") by JS's own property ordering rules, which would
+  // scramble the dropdown into a confusing 0,1,2,-2,-1 order.
+  const layerCurrent = clampLayer(ent.layer ?? 0);
+  const layerOptions = LAYERS.map((v) => `<option value="${v}" ${v === layerCurrent ? 'selected' : ''}>${LAYER_LABELS[String(v)]}</option>`).join('');
+  html.push(fieldGroup('Affichage', `
+    <label>Couche (superposition visuelle)</label>
+    <select id="p-layer">${layerOptions}</select>
+    <p class="hint">Change seulement l'ordre d'affichage (devant/derrière le joueur ou d'autres éléments) : quelle que soit la couche, cet élément continue d'interagir normalement avec le joueur (collisions, dangers, actions...).</p>`));
+
   const toggles = togglesForType(ent.type);
   if (toggles.length) {
     const rows = toggles.map(t => `<label class="toggle-row"><input type="checkbox" data-toggle="${t}" ${ent[t] ? 'checked' : ''} />${TOGGLE_LABELS[t]}</label>`).join('');
@@ -724,6 +744,9 @@ function bindPropsInputs(ent) {
   propsEl.querySelectorAll('[data-toggle]').forEach((el) => {
     el.addEventListener('change', () => { ent[el.dataset.toggle] = el.checked; render(); });
   });
+
+  const layerSel = document.getElementById('p-layer');
+  if (layerSel) layerSel.addEventListener('change', () => { ent.layer = clampLayer(layerSel.value); render(); });
 
   const facingSel = document.getElementById('p-facing');
   if (facingSel) facingSel.addEventListener('change', () => { ent.props.facing = facingSel.value; render(); });

@@ -70,6 +70,27 @@ export function togglesForType(type) {
   }
 }
 
+// Purely cosmetic z-ordering: which entities get drawn behind/in front of
+// others, and behind/in front of the player. This never touches collision,
+// hazards, or scripting — every entity fully interacts with the player
+// (solids are still solid, hazards still hurt, triggers still fire) no
+// matter what layer it's drawn on; only its paint order on screen changes.
+// 0 is the default and matches the game's original single-pass draw order
+// exactly, so untouched levels/entities render unchanged.
+export const LAYERS = [-2, -1, 0, 1, 2];
+export const LAYER_LABELS = {
+  '-2': 'Arrière-plan (tout derrière)',
+  '-1': 'Arrière-plan',
+  '0': 'Normal (par défaut)',
+  '1': 'Premier plan (devant le joueur)',
+  '2': 'Premier plan (tout devant)',
+};
+export function clampLayer(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-2, Math.min(2, n));
+}
+
 export const SPIKE_FACINGS = ['up', 'down', 'left', 'right'];
 export const FACING_LABELS = { up: 'Haut', down: 'Bas', left: 'Gauche', right: 'Droite' };
 
