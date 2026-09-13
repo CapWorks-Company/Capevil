@@ -4,6 +4,8 @@ import { deserializeLevel } from './level-model.js';
 import { getLevel, recordPlay, recordWin, likeLevel, reportLevel, isBackendReady } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
+import { showToast, promptModal } from './ui-kit.js';
+import { mountAudioButton } from './audio-ui.js';
 
 const canvas = document.getElementById('stage');
 const deathsEl = document.getElementById('deaths');
@@ -36,6 +38,7 @@ let session = null;
 
 isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; } }); });
 mountKeybindButton(document.getElementById('keybind-bar'));
+mountAudioButton(document.getElementById('audio-bar'));
 
 async function loadLevel() {
   if (remoteId) {
@@ -69,12 +72,15 @@ likeBtn.addEventListener('click', async () => {
 
 reportBtn.addEventListener('click', async () => {
   if (!remoteId) return;
-  if (!session) { alert('Connecte-toi (en haut) pour signaler ce niveau.'); return; }
-  const reason = prompt('Pourquoi signales-tu ce niveau officiel ?');
+  if (!session) { showToast('Connecte-toi (en haut) pour signaler ce niveau.', { type: 'error' }); return; }
+  const reason = await promptModal('Explique brièvement pourquoi ce niveau officiel pose problème.', {
+    title: '🚩 Signaler ce niveau', placeholder: 'Raison du signalement…', okLabel: 'Signaler', multiline: true,
+  });
   if (reason === null) return;
   reportBtn.disabled = true;
   const { error } = await reportLevel(remoteId, reason);
   reportBtn.textContent = error ? '🚩 Erreur' : '🚩 Signalé ✓';
+  showToast(error ? "Erreur lors de l'envoi du signalement." : 'Signalement envoyé, merci !', { type: error ? 'error' : 'success' });
 });
 
 loadLevel().then((level) => {

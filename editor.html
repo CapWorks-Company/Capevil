@@ -36,23 +36,56 @@
       <button class="btn small accent" id="playtest-btn">▶ Tester le niveau</button>
       <button class="btn small" id="debug-view-btn" style="display:none;">🐞 Vue debug</button>
       <div id="keybind-bar" style="display:inline-flex;"></div>
+      <div id="audio-bar" style="display:inline-flex;"></div>
       <button class="btn small primary" id="publish-btn">🚀 Publier</button>
     </nav>
-    <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-end;">
-      <div>
-        Colonnes <input type="number" id="cols-input" style="width:60px;" />
-        Lignes <input type="number" id="rows-input" style="width:60px;" />
-      </div>
-      <div style="font-size:12px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
-        <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;"><input type="checkbox" id="editbounds-toggle" style="width:auto;" />Zone d'édition verrouillée</label>
-        <span>Col.</span><input type="number" id="eb-colmin" style="width:52px;" /> – <input type="number" id="eb-colmax" style="width:52px;" />
-        <span>Lignes</span><input type="number" id="eb-rowmin" style="width:52px;" /> – <input type="number" id="eb-rowmax" style="width:52px;" />
-      </div>
-    </div>
+    <nav>
+      <button class="btn small" id="level-settings-btn">⚙ Niveau <span id="level-settings-label" class="muted" style="font-size:11px;"></span></button>
+    </nav>
   </div>
   <div id="pick-banner" class="hidden">
     <span>Clique sur un élément de la grille pour le choisir comme cible…</span>
     <button class="btn small" id="cancel-pick">Annuler</button>
+  </div>
+
+  <div id="level-settings-modal" class="modal-backdrop hidden">
+    <div class="modal-box" role="dialog" aria-modal="true" style="max-width:420px;">
+      <button class="modal-close" id="level-settings-close" aria-label="Fermer">✕</button>
+      <h2>⚙ Paramètres du niveau</h2>
+
+      <label style="font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-top:16px;">Taille de la grille</label>
+      <div style="display:flex;gap:10px;margin-top:6px;">
+        <div style="flex:1;">
+          <span class="muted" style="font-size:12px;">Colonnes</span>
+          <input type="number" id="cols-input" style="width:100%;margin-top:4px;" />
+        </div>
+        <div style="flex:1;">
+          <span class="muted" style="font-size:12px;">Lignes</span>
+          <input type="number" id="rows-input" style="width:100%;margin-top:4px;" />
+        </div>
+      </div>
+
+      <label style="font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-top:20px;">Zone éditable</label>
+      <p class="muted" style="font-size:12px;margin:4px 0 8px;line-height:1.4;">En dehors de ces bornes, la grille est protégée contre les modifications (utile pour préserver un cadre décoratif).</p>
+      <div style="display:flex;gap:10px;">
+        <div style="flex:1;">
+          <span class="muted" style="font-size:12px;">Colonnes (min – max)</span>
+          <div style="display:flex;gap:6px;margin-top:4px;">
+            <input type="number" id="eb-colmin" style="width:100%;" />
+            <input type="number" id="eb-colmax" style="width:100%;" />
+          </div>
+        </div>
+        <div style="flex:1;">
+          <span class="muted" style="font-size:12px;">Lignes (min – max)</span>
+          <div style="display:flex;gap:6px;margin-top:4px;">
+            <input type="number" id="eb-rowmin" style="width:100%;" />
+            <input type="number" id="eb-rowmax" style="width:100%;" />
+          </div>
+        </div>
+      </div>
+
+      <button class="btn small primary" id="level-settings-done" style="width:100%;margin-top:22px;">Terminé</button>
+    </div>
   </div>
   <div class="container" style="max-width:1300px;">
     <p id="status-msg" class="muted" style="min-height:18px;"></p>

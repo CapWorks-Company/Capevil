@@ -19,6 +19,11 @@
     <div id="account-bar"></div>
   </div>
 
+  <div class="hero">
+    <h2>Grimpe, saute, méfie-toi de tout.</h2>
+    <p class="muted">Un plateformer plein de pièges façon <em>Level Devil</em>, un éditeur complet pour construire les tiens, et des niveaux publiés par la communauté.</p>
+  </div>
+
   <div class="container">
     <div id="backend-warning" class="card hidden" style="border-color:#e63946;background:#3a1a1f;">
       ⚠️ La base de données Supabase n'est pas encore configurée (voir <code>js/config.js</code>).
@@ -29,34 +34,28 @@
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
         <h2 style="margin:0;">🏅 Parties officielles</h2>
+        <span class="muted" style="font-size:12.5px;">Sélectionnées et approuvées par un admin.</span>
       </div>
-      <p class="muted" style="margin-top:6px;">Ce niveau à été approuvé par un admin.</p>
-      <table style="margin-top:10px;">
-        <thead><tr><th>Titre</th><th>Auteur</th><th>Stats</th><th></th></tr></thead>
-        <tbody id="official-list"></tbody>
-      </table>
+      <div class="level-grid" id="official-list"></div>
     </div>
 
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-        <h2 style="margin:0;">Niveaux publiés par la communauté</h2>
-        <input type="search" id="search" placeholder="Rechercher un niveau…" />
+        <h2 style="margin:0;">🌍 Niveaux publiés par la communauté</h2>
+        <input type="search" id="search" placeholder="🔍 Rechercher un niveau…" />
       </div>
-      <table style="margin-top:14px;">
-        <thead><tr><th>Titre</th><th>Auteur</th><th>Stats</th><th></th></tr></thead>
-        <tbody id="levels-list"></tbody>
-      </table>
+      <div class="level-grid" id="levels-list"></div>
     </div>
 
     <div class="card">
-      <h2 style="margin-top:0;">Mes niveaux publiés</h2>
+      <h2 style="margin-top:0;">📦 Mes niveaux publiés</h2>
       <p class="muted" id="my-levels-hint">Connecte-toi pour voir et gérer (modifier / supprimer) les niveaux publiés avec ton compte.</p>
-      <div id="my-levels-list"></div>
+      <div class="level-grid" id="my-levels-list"></div>
     </div>
 
     <div class="card">
-      <h2 style="margin-top:0;">Mes brouillons (sauvegardés dans ce navigateur)</h2>
-      <div id="local-list"></div>
+      <h2 style="margin-top:0;">💾 Mes brouillons (sauvegardés dans ce navigateur)</h2>
+      <div class="level-grid" id="local-list"></div>
     </div>
   </div>
 

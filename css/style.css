@@ -69,6 +69,38 @@ a:hover { text-decoration: underline; }
 
 .container { max-width: 1100px; margin: 0 auto; padding: 24px; }
 
+.hero {
+  text-align: center; padding: 30px 24px 8px; max-width: 640px; margin: 0 auto;
+}
+.hero h2 {
+  font-family: var(--font-display); font-weight: 800; font-size: clamp(20px, 3vw, 28px);
+  margin: 0 0 8px; letter-spacing: .2px;
+}
+.hero p { margin: 0; line-height: 1.5; }
+
+.level-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 14px; margin-top: 14px;
+}
+.level-card {
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 14px;
+  padding: 15px 16px; display: flex; flex-direction: column; gap: 8px;
+  transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.level-card:hover { transform: translateY(-3px); box-shadow: 0 10px 26px rgba(0,0,0,0.35); border-color: #4a4f70; }
+.level-card.official {
+  border-color: rgba(247,127,0,0.35);
+  background: linear-gradient(180deg, rgba(247,127,0,0.08) 0%, var(--panel-2) 60%);
+}
+.level-card .lc-title { font-family: var(--font-display); font-weight: 700; font-size: 14.5px; line-height: 1.35; }
+.level-card .lc-author { font-size: 12px; color: var(--muted); margin-top: -4px; }
+.level-card .lc-stats { font-size: 12px; color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.level-card .lc-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+.level-empty {
+  grid-column: 1 / -1; color: var(--muted); padding: 26px 16px; text-align: center;
+  border: 1px dashed var(--border); border-radius: 12px; font-size: 13.5px;
+}
+
 .card {
   background: linear-gradient(180deg, var(--panel) 0%, var(--bg-2) 100%);
   border: 1px solid var(--border); border-radius: 16px;
@@ -209,8 +241,35 @@ canvas#stage {
   padding: 8px 12px; font-size: 13.5px;
 }
 .keybind-row button { min-width: 84px; font-family: var(--font-mono, monospace); }
+
+.audio-control { display: inline-flex; align-items: center; gap: 6px; }
+.audio-control input[type="range"] {
+  width: 70px; height: 4px; accent-color: var(--accent-2);
+  background: var(--panel-2); border-radius: 4px; cursor: pointer;
+}
+.audio-control input[type="range"]:disabled { opacity: .4; cursor: not-allowed; }
+
 @keyframes modalFadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes modalPopIn { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+/* --------------------------------- toasts -------------------------------- */
+#toast-root {
+  position: fixed; bottom: 18px; right: 18px; z-index: 500;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+  pointer-events: none; max-width: calc(100vw - 36px);
+}
+.toast {
+  background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent-3);
+  border-radius: 10px; padding: 11px 16px; font-size: 13.5px; color: var(--text); line-height: 1.4;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  opacity: 0; transform: translateY(8px) scale(.98);
+  transition: opacity .2s ease, transform .2s ease;
+  max-width: 320px; pointer-events: auto; cursor: pointer;
+}
+.toast.show { opacity: 1; transform: translateY(0) scale(1); }
+.toast-success { border-left-color: var(--accent-2); }
+.toast-error { border-left-color: var(--danger); }
+.toast-info { border-left-color: var(--accent-3); }
 
 /* --------------------------------- mobile -------------------------------- */
 #mobile-guard {

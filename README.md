@@ -10,17 +10,36 @@ inversion de la gravité, inversion des touches façon troll, changement de
 puissance de saut...). Une mort remet tout le niveau à zéro (triggers,
 positions, états) sauf le dernier checkpoint atteint.
 
-Inclut un éditeur de niveaux complet (avec une zone d'édition verrouillable
-pour protéger un cadre décoratif, et une bascule vue debug / vue réelle en
-playtest), des **comptes joueurs** (Supabase Auth, via une **fenêtre modale**
-de connexion/inscription) pour publier sous son vrai nom et gérer
-(modifier/supprimer) ses propres niveaux, un système de **likes**, une file
-de **demandes d'approbation** avec un espace **admin** pour promouvoir des
-niveaux en « Parties officielles », et un **signalement** réservé à ces
-niveaux officiels. Les touches (gauche/droite/haut/bas/saut) sont
-**remappables** et sauvegardées dans le navigateur. Le site affiche un
+La roue tournante (spinner) a une **hitbox circulaire** (et non plus son
+simple carré englobant), et chaque action de jeu a un petit **effet sonore
+synthétisé** (saut, atterrissage, mort, victoire, checkpoint, téléporteur,
+ressort, bouton — aucun fichier audio externe, tout est généré à la volée
+avec la Web Audio API) accompagné de **particules** (poussière aux pieds,
+explosion à la mort, confettis à la victoire) et d'un léger **tremblement de
+caméra** à la mort. Le son est réglable (muet + volume) et sauvegardé dans
+le navigateur.
+
+Inclut un éditeur de niveaux complet (avec une **zone éditable** définie par
+des bornes colonnes/lignes toujours actives — pratique pour protéger un
+cadre décoratif sans y toucher par erreur —, et une bascule vue debug / vue
+réelle en playtest), des **comptes joueurs** (Supabase Auth, via une
+**fenêtre modale** de connexion/inscription) pour publier sous son vrai nom
+et gérer (modifier/supprimer) ses propres niveaux, un système de **likes**,
+une file de **demandes d'approbation** avec un espace **admin** pour
+promouvoir des niveaux en « Parties officielles », et un **signalement**
+réservé à ces niveaux officiels. Les touches (gauche/droite/haut/bas/saut)
+sont **remappables** et sauvegardées dans le navigateur. Le site affiche un
 panneau plein écran invitant à revenir sur ordinateur pour toute visite
 mobile/tablette, car le jeu comme l'éditeur sont pensés clavier + souris.
+
+Toute l'interface passe par de petits **panels et fenêtres modales** plutôt
+que par les popups natives du navigateur : confirmations, saisies (raison
+d'un signalement…) et **notifications toast** discrètes en bas à droite
+remplacent partout `alert()` / `confirm()` / `prompt()`. La page d'accueil
+présente les niveaux sous forme de **cartes** (au lieu de tableaux) avec
+leurs stats en un coup d'œil, et l'éditeur regroupe la taille de la grille
+et la zone éditable dans un petit panneau « ⚙ Niveau » séparé, pour garder
+la barre d'outils dégagée.
 Aucune étape de build : ce sont des fichiers HTML/CSS/JS statiques. Ce
 dépôt est prêt à être hébergé à la fois sur **GitHub Pages** et sur un
 **Cloudflare Worker** (Static Assets) — les deux servent exactement les
@@ -35,13 +54,17 @@ game.html        → écran de jeu (?id=<uuid> pour un niveau publié,
                     ?local=<clé> pour un brouillon local, sinon niveau démo)
 editor.html      → éditeur de niveaux (?edit=<uuid> pour modifier un niveau publié)
 admin.html       → espace admin : approbation des niveaux + signalements
-js/engine.js      → moteur de jeu (physique, collisions, triggers/boutons, rendu)
+js/engine.js      → moteur de jeu (physique, collisions, triggers/boutons, rendu, son/particules/tremblement)
 js/editor.js      → logique de l'éditeur
 js/level-model.js → format de données d'un niveau (JSON)
 js/sample-level.js → niveau de démonstration
 js/auth-ui.js     → bouton + fenêtre modale de connexion/inscription réutilisée partout
 js/keybindings.js → touches par défaut + lecture/écriture dans le navigateur
 js/keybind-ui.js  → fenêtre modale « ⌨ Touches » pour les remapper
+js/audio-fx.js    → effets sonores synthétisés (Web Audio API) + réglage muet/volume (localStorage)
+js/audio-ui.js    → bouton muet + curseur de volume, réutilisé dans le jeu et l'éditeur
+js/particles.js   → système de particules (poussière, explosion de mort, confettis de victoire)
+js/ui-kit.js      → notifications toast + modales confirm/prompt réutilisables (remplace alert/confirm/prompt)
 js/mobile-guard.js → panneau plein écran "reviens sur ordinateur" (mobile/tablette)
 js/config.js      → clés Supabase (voir ci-dessous)
 js/supabase-client.js → comptes, publication / liste / likes / approbation / signalement
@@ -146,7 +169,6 @@ login && wrangler deploy`, si tu préfères.)*
 ## Prochaines améliorations possibles
 - Rôles admin plus fins (plusieurs admins, permissions différentes) et modération de comptes.
 - Commentaires sur les niveaux publiés.
-- Musique synchronisée et effets sonores.
-- Meilleure hitbox circulaire pour la roue tournante.
+- Musique de fond synchronisée (au-delà des effets sonores déjà présents).
 - Undo/redo et copier-coller dans l'éditeur.
 - Vérification automatique "ce niveau est-il faisable ?" avant publication.

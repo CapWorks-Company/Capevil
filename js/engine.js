@@ -6,6 +6,8 @@ import {
   GRAVITY_VECTORS, ACTION_TYPES, TRIGGER_MODES, PHYSICS,
 } from './constants.js';
 import { loadKeybinds, buildKeyMap } from './keybindings.js';
+import { sfx, unlockAudio } from './audio-fx.js';
+import { ParticleSystem } from './particles.js';
 
 export class Engine {
   constructor(canvas, level, { onDeath, onWin, onStateChange } = {}) {
@@ -18,7 +20,18 @@ export class Engine {
     this.raw = { left: false, right: false, up: false, down: false, jump: false };
     this.debugTriggers = false;
     this.keymap = buildKeyMap(loadKeybinds());
-    this._keydown = (e) => this._setKey(e.code, true);
+    this.particles = new ParticleSystem();
+    this.shake = { magnitude: 0, duration: 0, time: 0 }; // camera shake, see _triggerShake
+    this._keydown = (e) => {
+      unlockAudio();
+      // Prevent the browser's own reaction to game keys — Space/arrows
+      // scrolling the page, or Space re-clicking whatever toolbar button
+      // last had focus (e.g. the mute or keybind button) — without
+      // swallowing keystrokes while the player is actually typing somewhere.
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && this.keymap[e.code]) e.preventDefault();
+      this._setKey(e.code, true);
+    };
     this._keyup = (e) => this._setKey(e.code, false);
     this._onKeybindsChanged = () => { this.keymap = buildKeyMap(loadKeybinds()); };
     window.addEventListener('keydown', this._keydown);
@@ -57,6 +70,8 @@ export class Engine {
     this.scheduled = []; // [{time, run}]
     this._teleportCooldown = 0;
     this.camera = { x: 0, y: 0 };
+    this.particles.clear();
+    this.shake = { magnitude: 0, duration: 0, time: 0 };
     this.onStateChange({ deaths: this.deaths });
   }
 
@@ -120,10 +135,26 @@ export class Engine {
       const dt = Math.min((t - this._last) / 1000, 1 / 30);
       this._last = t;
       if (!this.dead && !this.won) this.update(dt);
+      // Cosmetic-only systems (death burst, confetti, camera shake) keep
+      // animating through the death-freeze / win state, even though gameplay
+      // itself is paused above — otherwise a death burst would freeze
+      // mid-air for the whole respawn delay.
+      this._updateCosmetics(dt);
       this.render();
       this._raf = requestAnimationFrame(loop);
     };
     this._raf = requestAnimationFrame(loop);
+  }
+
+  _updateCosmetics(dt) {
+    this.particles.update(dt);
+    if (this.shake.time > 0) this.shake.time = Math.max(0, this.shake.time - dt);
+  }
+
+  // Triggers a short, decaying camera shake — used automatically on death,
+  // and available to level authors via the SHAKE_CAMERA trigger action.
+  _triggerShake(magnitude = 10, duration = 0.3) {
+    this.shake = { magnitude, duration: Math.max(0.05, duration), time: Math.max(0.05, duration) };
   }
 
   stop() { cancelAnimationFrame(this._raf); }
@@ -140,6 +171,9 @@ export class Engine {
     if (this.dead) return;
     this.dead = true;
     this.deaths++;
+    sfx.death();
+    this.particles.deathBurst(this.player.x + this.player.w / 2, this.player.y + this.player.h / 2);
+    this._triggerShake(10, 0.35);
     this.onStateChange({ deaths: this.deaths });
     this.onDeath();
     setTimeout(() => {
@@ -152,6 +186,8 @@ export class Engine {
   winLevel() {
     if (this.won) return;
     this.won = true;
+    sfx.win();
+    this.particles.confetti(this.player.x + this.player.w / 2, this.player.y + this.player.h / 2);
     this.onWin({ deaths: this.deaths });
   }
 
@@ -244,10 +280,21 @@ export class Engine {
     return rects;
   }
 
+  // Point on the player's boundary facing "down" relative to current
+  // gravity — i.e. the feet — used to anchor cosmetic dust particles so they
+  // land under the player regardless of which wall gravity currently treats
+  // as the floor.
+  _feetPoint(p, g) {
+    const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
+    if (g.x !== 0) return [g.x > 0 ? p.x + p.w : p.x, cy];
+    return [cx, g.y > 0 ? p.y + p.h : p.y];
+  }
+
   _updatePhysics(dt) {
     const p = this.player;
     const g = GRAVITY_VECTORS[p.gravityDir];
     const input = this._input();
+    const wasOnGround = p.onGround;
 
     // acceleration due to gravity
     p.vx += g.x * PHYSICS.GRAVITY_ACCEL * dt;
@@ -286,6 +333,8 @@ export class Engine {
       p.vx += -g.x * PHYSICS.JUMP_POWER * p.jumpMult;
       p.vy += -g.y * PHYSICS.JUMP_POWER * p.jumpMult;
       p.onGround = false;
+      sfx.jump();
+      this.particles.dust(...this._feetPoint(p, g));
     }
 
     // integrate + resolve collisions on each axis separately
@@ -296,6 +345,11 @@ export class Engine {
     this._resolveAxis(p, rects, 'x', g);
     p.y += p.vy * dt;
     this._resolveAxis(p, rects, 'y', g);
+
+    if (!wasOnGround && p.onGround) {
+      sfx.land();
+      this.particles.dust(...this._feetPoint(p, g));
+    }
 
     // out of level bounds -> death
     const margin = CELL * 2;
@@ -333,6 +387,17 @@ export class Engine {
     return p.x < r.x + r.w && p.x + p.w > r.x && p.y < r.y + r.h && p.y + p.h > r.y;
   }
 
+  // Circle-vs-AABB distance test: finds the point of the (axis-aligned)
+  // player box closest to the circle's center, then checks whether that
+  // point is within the radius. Used for the spinner's disc-shaped blades,
+  // which occupy far less area than their square bounding box.
+  _circleRectOverlap(cx, cy, r, rect) {
+    const closestX = Math.max(rect.x, Math.min(cx, rect.x + rect.w));
+    const closestY = Math.max(rect.y, Math.min(cy, rect.y + rect.h));
+    const dx = cx - closestX, dy = cy - closestY;
+    return (dx * dx + dy * dy) < r * r;
+  }
+
   _checkHazardsAndGoal() {
     const p = this.player;
     for (const rt of this.runtime.values()) {
@@ -341,6 +406,13 @@ export class Engine {
       if (!this._overlap(p, box)) continue;
 
       if (HAZARD_TYPES.has(t)) {
+        if (t === ENTITY_TYPES.SPINNER) {
+          // Same radius formula as the visual rendering (_renderEntity), so
+          // the hitbox matches exactly what's drawn on screen.
+          const cx = rt.x + box.w / 2, cy = rt.y + box.h / 2;
+          const radius = CELL * ((rt.def.props && rt.def.props.radius) || 0.9) * rt.def.w;
+          if (!this._circleRectOverlap(cx, cy, radius, p)) continue;
+        }
         if (!rt.harmless && !rt.passable) this.killPlayer();
         continue;
       }
@@ -349,6 +421,8 @@ export class Engine {
         const power = ((rt.def.props && rt.def.props.power) || 1.6) * PHYSICS.JUMP_POWER;
         const v = GRAVITY_VECTORS[dir]; // direct push direction (not opposed like gravity)
         p.vx = v.x * power; p.vy = v.y * power;
+        sfx.spring();
+        this.particles.dust(rt.x + box.w / 2, rt.y);
       }
       if (t === ENTITY_TYPES.GOAL) {
         this.winLevel();
@@ -356,6 +430,7 @@ export class Engine {
       if (t === ENTITY_TYPES.CHECKPOINT && !rt.activated) {
         rt.activated = true;
         this.respawn = { x: rt.def.x, y: rt.def.y };
+        sfx.checkpoint();
       }
     }
   }
@@ -388,6 +463,7 @@ export class Engine {
     p.x = targetRt.x + (nextDef.w * CELL - p.w) / 2;
     p.y = targetRt.y + (nextDef.h * CELL - p.h) / 2;
     this._teleportCooldown = 0.5;
+    sfx.teleport();
     if (rt.def.props && rt.def.props.oneUse) rt.usedOnce = true;
   }
 
@@ -427,6 +503,7 @@ export class Engine {
       const overlapping = this._overlap(p, box);
       if (overlapping && !rt.wasOverlapping && this.simTime >= rt.buttonReadyAt) {
         this._fireTrigger(rt);
+        sfx.button();
         const cooldown = Math.max(0.05, (rt.def.props && rt.def.props.cooldown) ?? 1);
         rt.buttonReadyAt = this.simTime + cooldown;
       }
@@ -517,6 +594,11 @@ export class Engine {
         if (action.params.duration) setTimeout(() => { p.speedMult = 1; }, action.params.duration * 1000);
         break;
       }
+      case ACTION_TYPES.SHAKE_CAMERA: {
+        const params = action.params || {};
+        this._triggerShake(params.magnitude || 10, params.duration || 0.3);
+        break;
+      }
       default: break;
     }
   }
@@ -538,7 +620,13 @@ export class Engine {
     ctx.fillStyle = '#1b1e2b';
     ctx.fillRect(0, 0, cv.width, cv.height);
     ctx.save();
-    ctx.translate(-this.camera.x, -this.camera.y);
+    let shakeX = 0, shakeY = 0;
+    if (this.shake.time > 0) {
+      const mag = this.shake.magnitude * (this.shake.time / this.shake.duration);
+      shakeX = (Math.random() * 2 - 1) * mag;
+      shakeY = (Math.random() * 2 - 1) * mag;
+    }
+    ctx.translate(-this.camera.x + shakeX, -this.camera.y + shakeY);
 
     // grid backdrop — a build aid only: never shown in real gameplay, only in
     // the editor's debug/playtest view (same flag that reveals triggers).
@@ -556,6 +644,7 @@ export class Engine {
 
     for (const rt of this.runtime.values()) this._renderEntity(rt);
     this._renderPlayer();
+    this.particles.render(ctx);
 
     ctx.restore();
   }

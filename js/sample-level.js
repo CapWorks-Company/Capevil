@@ -10,6 +10,7 @@ export function buildSampleLevel() {
   level.author = 'Level Devil';
   level.cols = 50;
   level.rows = 14;
+  level.editBounds = { colMin: 0, colMax: level.cols - 1, rowMin: 0, rowMax: level.rows - 1 };
   level.playerStart = { x: 1, y: 11 };
 
   const add = (type, x, y, overrides) => {

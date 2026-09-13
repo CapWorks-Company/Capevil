@@ -98,12 +98,6 @@ export const PHYSICS = {
 
 export const DEFAULT_GRID = { cols: 30, rows: 14 };
 
-// The editor can lock editing (placing/moving/erasing/player-start) to a
-// rectangular sub-area of the grid, leaving whatever lies outside untouched —
-// handy for a level with a fixed decorative border. This is only ever an
-// editor-time restriction: the engine/game never reads `editBounds` at all.
-export const DEFAULT_EDIT_BOUNDS = { colMin: 17, colMax: 90, rowMin: 6, rowMax: 30 };
-
 // Teleporters sharing a "frequency" are linked together. Capped at 3 per
 // group (matches the physical idea of a few linked portals, and keeps the
 // cycling order easy to reason about in the editor).

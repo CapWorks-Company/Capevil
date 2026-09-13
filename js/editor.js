@@ -1,7 +1,7 @@
 import {
   CELL, ENTITY_TYPES, ACTION_TYPES, TRIGGER_MODES, GRAVITY_DIRS,
   ENTITY_TOGGLES, TOGGLE_LABELS, togglesForType, SPIKE_FACINGS, FACING_LABELS,
-  TELEPORTER_MAX_PER_FREQUENCY, TELEPORTER_FREQUENCIES, DEFAULT_EDIT_BOUNDS,
+  TELEPORTER_MAX_PER_FREQUENCY, TELEPORTER_FREQUENCIES,
 } from './constants.js';
 import {
   createEmptyLevel, createEntity, createAction, cloneLevel, findEntity,
@@ -14,6 +14,8 @@ import { saveLocalDraft, loadLocalDraft } from './local-storage.js';
 import { publishLevel, updateOwnLevel, getLevel, isBackendReady, getSession, getMyProfile } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
+import { mountAudioButton } from './audio-ui.js';
+import { showToast, confirmModal } from './ui-kit.js';
 
 // ---------------------------------------------------------------- palette
 const PALETTE = [
@@ -60,7 +62,6 @@ const titleInput = document.getElementById('level-title-input');
 const authorInput = document.getElementById('level-author-input');
 const colsInput = document.getElementById('cols-input');
 const rowsInput = document.getElementById('rows-input');
-const ebToggle = document.getElementById('editbounds-toggle');
 const ebColMin = document.getElementById('eb-colmin');
 const ebColMax = document.getElementById('eb-colmax');
 const ebRowMin = document.getElementById('eb-rowmin');
@@ -110,6 +111,7 @@ async function init() {
   bindToolbar();
   bindCanvas();
   mountKeybindButton(document.getElementById('keybind-bar'));
+  mountAudioButton(document.getElementById('audio-bar'));
 
   const accountBar = document.getElementById('account-bar');
   if (accountBar) {
@@ -163,19 +165,30 @@ function resizeCanvas() {
 }
 
 // ---------------------------------------------------------- editable zone
-// Optionally locks editing (placing/moving/erasing/player-start) to a
-// rectangular sub-area of the grid, so a level with a fixed decorative
-// border can't be accidentally edited outside its playable core. Purely an
-// editor-time convenience — never saved into anything the engine reads.
+// The 4 fields always define exactly which cells can be edited (placed,
+// moved, erased, player-start) — no separate on/off toggle. By default
+// they span the whole grid, i.e. nothing is restricted; narrowing them
+// protects a decorative border from being edited. Purely an editor-time
+// convenience — never read by the engine.
 function syncEditBoundsInputs() {
   const eb = level.editBounds;
-  const enabled = !!(eb && eb.enabled);
-  ebToggle.checked = enabled;
-  ebColMin.value = eb ? eb.colMin : DEFAULT_EDIT_BOUNDS.colMin;
-  ebColMax.value = eb ? eb.colMax : DEFAULT_EDIT_BOUNDS.colMax;
-  ebRowMin.value = eb ? eb.rowMin : DEFAULT_EDIT_BOUNDS.rowMin;
-  ebRowMax.value = eb ? eb.rowMax : DEFAULT_EDIT_BOUNDS.rowMax;
-  for (const el of [ebColMin, ebColMax, ebRowMin, ebRowMax]) el.disabled = !enabled;
+  ebColMin.value = eb.colMin;
+  ebColMax.value = eb.colMax;
+  ebRowMin.value = eb.rowMin;
+  ebRowMax.value = eb.rowMax;
+  updateLevelSettingsLabel();
+}
+
+// Small glanceable summary on the "⚙ Niveau" toolbar button, so the grid
+// size and editable zone are visible without opening the settings panel —
+// showing the zone only once it's actually narrower than the full grid,
+// since "the whole grid" isn't information worth a badge.
+function updateLevelSettingsLabel() {
+  const label = document.getElementById('level-settings-label');
+  if (!label) return;
+  const eb = level.editBounds;
+  const restricted = eb.colMin > 0 || eb.rowMin > 0 || eb.colMax < level.cols - 1 || eb.rowMax < level.rows - 1;
+  label.textContent = `(${level.cols}×${level.rows}${restricted ? ' 🔒' : ''})`;
 }
 
 function applyEditBoundsFromInputs() {
@@ -184,19 +197,16 @@ function applyEditBoundsFromInputs() {
   // The zone can only ever be as big as the grid — rather than silently
   // cutting the requested max down to fit (confusing: "why won't it take
   // 30?"), grow the grid itself so the requested zone always fits.
-  if (ebToggle.checked) {
-    if (Number.isFinite(wantColMax) && wantColMax >= level.cols) {
-      level.cols = wantColMax + 1;
-      colsInput.value = level.cols;
-    }
-    if (Number.isFinite(wantRowMax) && wantRowMax >= level.rows) {
-      level.rows = wantRowMax + 1;
-      rowsInput.value = level.rows;
-    }
-    resizeCanvas();
+  if (Number.isFinite(wantColMax) && wantColMax >= level.cols) {
+    level.cols = wantColMax + 1;
+    colsInput.value = level.cols;
   }
+  if (Number.isFinite(wantRowMax) && wantRowMax >= level.rows) {
+    level.rows = wantRowMax + 1;
+    rowsInput.value = level.rows;
+  }
+  resizeCanvas();
   level.editBounds = normalizeEditBounds({
-    enabled: ebToggle.checked,
     colMin: parseInt(ebColMin.value, 10),
     colMax: wantColMax,
     rowMin: parseInt(ebRowMin.value, 10),
@@ -208,13 +218,12 @@ function applyEditBoundsFromInputs() {
 
 function inEditBounds(cx, cy) {
   const eb = level.editBounds;
-  if (!eb || !eb.enabled) return true;
   return cx >= eb.colMin && cx <= eb.colMax && cy >= eb.rowMin && cy <= eb.rowMax;
 }
 
 function editBoundsMsg() {
   const eb = level.editBounds;
-  return `Zone verrouillée : tu ne peux modifier que les colonnes ${eb.colMin}-${eb.colMax}, lignes ${eb.rowMin}-${eb.rowMax}.`;
+  return `Hors zone éditable : tu ne peux modifier que les colonnes ${eb.colMin}-${eb.colMax}, lignes ${eb.rowMin}-${eb.rowMax}.`;
 }
 
 // ---------------------------------------------------------------- palette UI
@@ -310,7 +319,8 @@ function drawTriggerLinks() {
 // touched right now.
 function drawEditBoundsOverlay() {
   const eb = level.editBounds;
-  if (!eb || !eb.enabled) return;
+  const isFullGrid = eb.colMin === 0 && eb.colMax === level.cols - 1 && eb.rowMin === 0 && eb.rowMax === level.rows - 1;
+  if (isFullGrid) return;
   const left = eb.colMin * CELL, top = eb.rowMin * CELL;
   const right = (eb.colMax + 1) * CELL, bottom = (eb.rowMax + 1) * CELL;
   ctx.save();
@@ -772,30 +782,28 @@ function bindToolbar() {
   // authorInput is read-only: the author is always the signed-in account's
   // name (see syncAuthorField), never free text.
   colsInput.addEventListener('change', () => {
+    // If the editable zone's right edge was tracking the grid's own edge
+    // (the common/default case: no border reserved), keep tracking it as
+    // the grid is resized — resizing shouldn't silently introduce a lock.
+    const wasFullWidth = level.editBounds.colMax >= level.cols - 1;
     level.cols = Math.max(8, parseInt(colsInput.value) || 20);
+    if (wasFullWidth) level.editBounds.colMax = level.cols - 1;
     level.editBounds = normalizeEditBounds(level.editBounds, level.cols, level.rows);
     syncEditBoundsInputs(); resizeCanvas(); render();
   });
   rowsInput.addEventListener('change', () => {
+    const wasFullHeight = level.editBounds.rowMax >= level.rows - 1;
     level.rows = Math.max(6, parseInt(rowsInput.value) || 12);
+    if (wasFullHeight) level.editBounds.rowMax = level.rows - 1;
     level.editBounds = normalizeEditBounds(level.editBounds, level.cols, level.rows);
     syncEditBoundsInputs(); resizeCanvas(); render();
   });
 
-  ebToggle.addEventListener('change', () => {
-    if (ebToggle.checked && !level.editBounds) {
-      // first time it's turned on for this level: prefill with sensible defaults
-      ebColMin.value = DEFAULT_EDIT_BOUNDS.colMin;
-      ebColMax.value = DEFAULT_EDIT_BOUNDS.colMax;
-      ebRowMin.value = DEFAULT_EDIT_BOUNDS.rowMin;
-      ebRowMax.value = DEFAULT_EDIT_BOUNDS.rowMax;
-    }
-    applyEditBoundsFromInputs();
-  });
   for (const el of [ebColMin, ebColMax, ebRowMin, ebRowMax]) el.addEventListener('change', applyEditBoundsFromInputs);
 
-  document.getElementById('new-level').addEventListener('click', () => {
-    if (!confirm('Créer un nouveau niveau vide ? Le travail non sauvegardé sera perdu.')) return;
+  document.getElementById('new-level').addEventListener('click', async () => {
+    const ok = await confirmModal('Créer un nouveau niveau vide ? Le travail non sauvegardé sera perdu.', { title: 'Nouveau niveau', okLabel: 'Créer', danger: true });
+    if (!ok) return;
     level = createEmptyLevel('Nouveau niveau');
     level.localKey = null;
     editingRemoteId = null;
@@ -803,8 +811,9 @@ function bindToolbar() {
   });
 
   const loadDemoBtn = document.getElementById('load-demo');
-  if (loadDemoBtn) loadDemoBtn.addEventListener('click', () => {
-    if (!confirm('Charger le niveau de démonstration ? Le travail non sauvegardé sera perdu.')) return;
+  if (loadDemoBtn) loadDemoBtn.addEventListener('click', async () => {
+    const ok = await confirmModal('Charger le niveau de démonstration ? Le travail non sauvegardé sera perdu.', { title: 'Charger la démo', okLabel: 'Charger', danger: true });
+    if (!ok) return;
     level = buildSampleLevel();
     level.localKey = null;
     editingRemoteId = null;
@@ -815,6 +824,7 @@ function bindToolbar() {
     const key = saveLocalDraft(level);
     history.replaceState(null, '', `editor.html?local=${key}`);
     setStatus('Brouillon enregistré dans ce navigateur ✓');
+    showToast('Brouillon enregistré dans ce navigateur ✓', { type: 'success' });
   });
 
   document.getElementById('export-json').addEventListener('click', () => {
@@ -823,6 +833,7 @@ function bindToolbar() {
     a.href = URL.createObjectURL(blob);
     a.download = `${(level.title || 'niveau').replace(/\s+/g, '_')}.json`;
     a.click();
+    showToast('Fichier JSON téléchargé ✓', { type: 'success' });
   });
 
   document.getElementById('import-json').addEventListener('change', (e) => {
@@ -836,7 +847,11 @@ function bindToolbar() {
         editingRemoteId = null;
         syncHeaderInputs(); syncAuthorField(); resizeCanvas(); selectedId = null; render(); renderProps();
         setStatus('Niveau importé ✓');
-      } catch { setStatus('Fichier JSON invalide.', true); }
+        showToast('Niveau importé ✓', { type: 'success' });
+      } catch {
+        setStatus('Fichier JSON invalide.', true);
+        showToast('Fichier JSON invalide.', { type: 'error' });
+      }
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -844,24 +859,27 @@ function bindToolbar() {
 
   document.getElementById('publish-btn').addEventListener('click', async () => {
     const errors = validateLevel(level);
-    if (errors.length) { setStatus(errors.join(' '), true); return; }
+    if (errors.length) { setStatus(errors.join(' '), true); showToast(errors.join(' '), { type: 'error', duration: 5000 }); return; }
     const ready = await isBackendReady();
-    if (!ready) { setStatus('Supabase non configuré : impossible de publier pour le moment.', true); return; }
-    if (!session) { setStatus('Connecte-toi (ou crée un compte) ci-dessus pour publier : le nom d’auteur vient de ton compte.', true); return; }
+    if (!ready) { setStatus('Supabase non configuré : impossible de publier pour le moment.', true); showToast('Supabase non configuré : impossible de publier pour le moment.', { type: 'error' }); return; }
+    if (!session) { setStatus('Connecte-toi (ou crée un compte) ci-dessus pour publier : le nom d’auteur vient de ton compte.', true); showToast('Connecte-toi (en haut) pour publier — le nom d’auteur vient de ton compte.', { type: 'error' }); return; }
     try {
       if (editingRemoteId) {
         setStatus('Enregistrement…');
         await updateOwnLevel(editingRemoteId, level);
         setStatus('Modifications enregistrées ✓');
+        showToast('Modifications enregistrées ✓', { type: 'success' });
       } else {
         setStatus('Publication…');
         const res = await publishLevel(level);
         editingRemoteId = res.id;
         updatePublishButtonState();
         setStatus(`Publié ✓ (id ${res.id.slice(0, 8)}…)`);
+        showToast('Niveau publié avec succès ✓', { type: 'success' });
       }
     } catch (err) {
       setStatus('Erreur lors de la publication : ' + (err.message || err), true);
+      showToast('Erreur lors de la publication : ' + (err.message || err), { type: 'error' });
     }
   });
 
@@ -875,6 +893,27 @@ function bindToolbar() {
     pickingTargetFor = null;
     pickBanner.classList.add('hidden');
   });
+
+  bindLevelSettingsModal();
+}
+
+// The grid-size + editable-zone fields live inside a small modal (kept out
+// of the main toolbar so it doesn't compete for space with the far more
+// frequently used buttons); the inputs themselves are the exact same
+// long-lived elements referenced everywhere above (colsInput, ebColMin…) —
+// this just shows/hides the panel around them.
+function bindLevelSettingsModal() {
+  const modal = document.getElementById('level-settings-modal');
+  const openBtn = document.getElementById('level-settings-btn');
+  const closeBtn = document.getElementById('level-settings-close');
+  const doneBtn = document.getElementById('level-settings-done');
+  const open = () => modal.classList.remove('hidden');
+  const close = () => modal.classList.add('hidden');
+  openBtn.addEventListener('click', open);
+  closeBtn.addEventListener('click', close);
+  doneBtn.addEventListener('click', close);
+  modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.classList.contains('hidden')) close(); });
 }
 
 // While playtesting, lets you flip between the builder's "debug" view (grid,

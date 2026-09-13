@@ -17,25 +17,31 @@ export function createEmptyLevel(title = 'Nouveau niveau') {
     playerStart: { x: 1, y: DEFAULT_GRID.rows - 2 },
     entities: [],
     triggers: [],
-    editBounds: null, // optional { enabled, colMin, colMax, rowMin, rowMax } — see normalizeEditBounds
+    // The editable area within the grid — always in effect (no on/off
+    // toggle): by default it spans the whole grid (0..cols-1 / 0..rows-1),
+    // which simply means nothing is restricted. Narrowing it protects a
+    // decorative border from being edited. See normalizeEditBounds.
+    editBounds: { colMin: 0, colMax: DEFAULT_GRID.cols - 1, rowMin: 0, rowMax: DEFAULT_GRID.rows - 1 },
     createdAt: null,
     updatedAt: null,
   };
 }
 
-// Validates/clamps an editBounds object against the level's current grid size.
-// Returns null when disabled or malformed, so callers can just check truthiness.
+// Validates/clamps an editBounds object against the level's current grid
+// size. Always returns a concrete { colMin, colMax, rowMin, rowMax } — a
+// missing/malformed field just falls back to that edge of the grid, so an
+// empty/absent editBounds naturally means "the whole grid is editable".
 export function normalizeEditBounds(eb, cols, rows) {
-  if (!eb || !eb.enabled) return null;
-  let colMin = Number.isFinite(eb.colMin) ? Math.round(eb.colMin) : 0;
-  let colMax = Number.isFinite(eb.colMax) ? Math.round(eb.colMax) : cols - 1;
-  let rowMin = Number.isFinite(eb.rowMin) ? Math.round(eb.rowMin) : 0;
-  let rowMax = Number.isFinite(eb.rowMax) ? Math.round(eb.rowMax) : rows - 1;
+  const src = eb || {};
+  let colMin = Number.isFinite(src.colMin) ? Math.round(src.colMin) : 0;
+  let colMax = Number.isFinite(src.colMax) ? Math.round(src.colMax) : cols - 1;
+  let rowMin = Number.isFinite(src.rowMin) ? Math.round(src.rowMin) : 0;
+  let rowMax = Number.isFinite(src.rowMax) ? Math.round(src.rowMax) : rows - 1;
   colMin = Math.max(0, Math.min(colMin, cols - 1));
   colMax = Math.max(colMin, Math.min(colMax, cols - 1));
   rowMin = Math.max(0, Math.min(rowMin, rows - 1));
   rowMax = Math.max(rowMin, Math.min(rowMax, rows - 1));
-  return { enabled: true, colMin, colMax, rowMin, rowMax };
+  return { colMin, colMax, rowMin, rowMax };
 }
 
 // Picks the lowest teleporter frequency that still has room (< max members),
