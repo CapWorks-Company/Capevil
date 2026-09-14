@@ -1,7 +1,7 @@
 // Lightweight procedural sound effects via the Web Audio API. Everything is
 // synthesized on the fly with oscillators/noise — no external audio files,
 // so it needs zero network access and works fully offline.
-const STORAGE_KEY = 'leveldevil_audio';
+const STORAGE_KEY = 'capevil_audio';
 
 function loadSettings() {
   try {
@@ -50,14 +50,14 @@ export function setMuted(muted) {
   settings.muted = !!muted;
   saveSettings(settings);
   if (masterGain) masterGain.gain.value = settings.muted ? 0 : settings.volume;
-  window.dispatchEvent(new CustomEvent('leveldevil:audio-changed'));
+  window.dispatchEvent(new CustomEvent('capevil:audio-changed'));
 }
 
 export function setVolume(volume) {
   settings.volume = Math.max(0, Math.min(1, volume));
   saveSettings(settings);
   if (masterGain && !settings.muted) masterGain.gain.value = settings.volume;
-  window.dispatchEvent(new CustomEvent('leveldevil:audio-changed'));
+  window.dispatchEvent(new CustomEvent('capevil:audio-changed'));
 }
 
 function tone({ freq = 440, type = 'sine', duration = 0.15, gain = 0.3, freqEnd = null, delay = 0 }) {

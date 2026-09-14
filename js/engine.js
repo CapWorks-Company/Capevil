@@ -45,14 +45,14 @@ export class Engine {
     this._onKeybindsChanged = () => { this.keymap = buildKeyMap(loadKeybinds()); };
     window.addEventListener('keydown', this._keydown);
     window.addEventListener('keyup', this._keyup);
-    window.addEventListener('leveldevil:keybinds-changed', this._onKeybindsChanged);
+    window.addEventListener('capevil:keybinds-changed', this._onKeybindsChanged);
     this.reset();
   }
 
   destroy() {
     window.removeEventListener('keydown', this._keydown);
     window.removeEventListener('keyup', this._keyup);
-    window.removeEventListener('leveldevil:keybinds-changed', this._onKeybindsChanged);
+    window.removeEventListener('capevil:keybinds-changed', this._onKeybindsChanged);
     cancelAnimationFrame(this._raf);
   }
 
@@ -449,15 +449,29 @@ export class Engine {
   // Lets the player shove a crate sideways by walking into it. Called right
   // after the player's tentative (pre-collision) x-move for this frame, so
   // `p.x` already reflects where they're trying to go. A crate the player is
-  // (now) overlapping gets shifted the same direction by exactly the
-  // penetration depth — enough to stay flush with no overlap, so it keeps
-  // moving in lockstep with the player for as long as they keep walking into
-  // it. If the crate has no room (another solid/crate in the way, or the
-  // grid edge), it doesn't move, and the caller's normal solid-collision
+  // (now) overlapping gets shifted the same direction, clamped to however
+  // far it can actually travel before overlapping something else — enough
+  // to stay flush with the player, so it keeps moving in lockstep with them
+  // for as long as they keep walking into it. If the crate has zero room to
+  // budge at all, it doesn't move, and the caller's normal solid-collision
   // resolution (against the crate's unchanged position) blocks the player
   // exactly like walking into a block. A crate resting on top of the player
   // (or vice versa) never triggers this — touching flush along y, not
   // overlapping, is exactly what `_overlap` treats as "no collision".
+  //
+  // This used to be all-or-nothing: if shoving the crate the FULL requested
+  // distance (the player's entire per-frame penetration) would overlap
+  // anything — another solid ahead, or the grid edge — the crate didn't
+  // move AT ALL, even by a smaller safe amount. The instant a crate got
+  // within less than one frame's push distance of an obstacle (a wall, the
+  // level edge, or the far side of a 1-cell gap it should have been able to
+  // enter), it would permanently freeze right there: every later frame
+  // requests that same full penetration distance again, which still
+  // overshoots past the obstacle by the same sliver, so the crate — and the
+  // player pushing it, now flush against it — could never creep the last
+  // few pixels closer or align with a gap it was actually narrow enough to
+  // pass through. Clamping the move to the nearest obstacle instead lets it
+  // creep up flush frame by frame, same as the player's own collision does.
   _pushCrates() {
     const p = this.player;
     if (p.vx === 0) return;
@@ -468,12 +482,17 @@ export class Engine {
       if (!this._overlap(p, box)) continue;
       const penetration = pushDir > 0 ? (p.x + p.w - box.x) : (box.x + box.w - p.x);
       if (penetration <= 0) continue;
-      const newX = rt.x + pushDir * penetration;
-      if (newX < 0 || newX + box.w > this.level.cols * CELL) continue; // grid edge blocks it
-      const testBox = { x: newX, y: rt.y, w: box.w, h: box.h };
-      const blocked = this._solidRects().some((r) => r.id !== rt.def.id && this._overlap(testBox, r));
-      if (blocked) continue;
-      rt.x = newX;
+      let maxMove = penetration;
+      if (pushDir > 0) maxMove = Math.min(maxMove, this.level.cols * CELL - (box.x + box.w));
+      else maxMove = Math.min(maxMove, box.x);
+      for (const r of this._solidRects()) {
+        if (r.id === rt.def.id) continue;
+        if (box.y >= r.y + r.h || box.y + box.h <= r.y) continue; // no vertical overlap: irrelevant to a horizontal push
+        if (pushDir > 0 && r.x >= box.x + box.w) maxMove = Math.min(maxMove, r.x - (box.x + box.w));
+        else if (pushDir < 0 && r.x + r.w <= box.x) maxMove = Math.min(maxMove, box.x - (r.x + r.w));
+      }
+      if (maxMove <= 0) continue;
+      rt.x += pushDir * maxMove;
     }
   }
 

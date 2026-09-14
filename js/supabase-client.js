@@ -18,7 +18,7 @@ async function getClient() {
     return _client;
   } catch (err) {
     _loadFailed = true;
-    console.error('Level Devil: impossible de charger le client Supabase (réseau ?)', err);
+    console.error('Capevil: impossible de charger le client Supabase (réseau ?)', err);
     return null;
   }
 }

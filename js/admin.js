@@ -48,7 +48,7 @@ async function refreshPending() {
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <div>
         <strong>${escapeHtml(lvl.title)}</strong>
-        <div class="muted" style="font-size:12px;">par ${escapeHtml(lvl.author) || '—'} · ${lvl.plays} parties · ❤ ${lvl.likes ?? 0}</div>
+        <div class="muted" style="font-size:12px;">par ${escapeHtml(lvl.author) || '—'} · ${lvl.plays} parties · 💖 ${lvl.likes ?? 0}</div>
       </div>
       <div style="display:flex;gap:6px;">
         <a class="btn small" href="editor.html?preview=${lvl.id}" target="_blank" rel="noopener">👁️ Aperçu complet</a>

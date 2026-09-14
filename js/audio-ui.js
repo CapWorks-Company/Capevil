@@ -33,7 +33,7 @@ export function mountAudioButton(container) {
     if (getAudioSettings().muted) setMuted(false);
     sync();
   });
-  window.addEventListener('leveldevil:audio-changed', sync);
+  window.addEventListener('capevil:audio-changed', sync);
 
   sync();
   return wrap;

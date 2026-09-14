@@ -7,7 +7,7 @@ import { createEmptyLevel, createEntity, createAction } from './level-model.js';
 
 export function buildSampleLevel() {
   const level = createEmptyLevel('Démo : le couloir infernal');
-  level.author = 'Level Devil';
+  level.author = 'Capevil';
   level.cols = 50;
   level.rows = 14;
   // Keep the spawn's own state (gravity/visibility) that createEmptyLevel

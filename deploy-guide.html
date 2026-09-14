@@ -1,5 +1,5 @@
 <meta charset="UTF-8">
-<title>Mise en ligne de Level Devil</title>
+<title>Mise en ligne de Capevil</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700;900&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -155,7 +155,7 @@
 <div class="wrap">
   <header>
     <div class="eyebrow"><span class="dot"></span> Guide de mise en ligne</div>
-    <h1>Level Devil, en <em>ligne</em>, de A à Z</h1>
+    <h1>Capevil, en <em>ligne</em>, de A à Z</h1>
     <p class="lede">Trois services, un seul jeu : le code vit sur GitHub, le site est servi en double (GitHub Pages et un Worker Cloudflare), et Supabase est la vraie base — la seule pièce qui fait office de "backend".</p>
 
     <div class="arch">
@@ -253,7 +253,7 @@
       <div class="field"><span class="k">Ton site sera à :</span><br><span class="v">https://TON-PSEUDO.github.io/level-devil/</span></div>
 
       <div class="step"><input type="checkbox" id="s5"><label for="s5">GitHub Pages est activé (le bandeau vert "Your site is live at…" est apparu)</label></div>
-      <div class="step"><input type="checkbox" id="s6"><label for="s6">L'URL <code>.github.io</code> affiche bien la page d'accueil de Level Devil</label></div>
+      <div class="step"><input type="checkbox" id="s6"><label for="s6">L'URL <code>.github.io</code> affiche bien la page d'accueil de Capevil</label></div>
     </div>
   </section>
 
@@ -360,7 +360,7 @@ where id = (select id from auth.users where email = 'ton-email@exemple.com');</p
     </div>
   </section>
 
-  <footer>Level Devil — jeu, éditeur et niveaux communautaires. Guide généré pour ton déploiement du <span id="today"></span>.</footer>
+  <footer>Capevil — jeu, éditeur et niveaux communautaires. Guide généré pour ton déploiement du <span id="today"></span>.</footer>
 </div>
 
 <script>
@@ -370,7 +370,7 @@ where id = (select id from auth.users where email = 'ton-email@exemple.com');</p
   } catch(e) {}
 
   var boxes = Array.prototype.slice.call(document.querySelectorAll('.step input[type=checkbox]'));
-  var KEY = 'leveldevil_deploy_progress';
+  var KEY = 'capevil_deploy_progress';
 
   function load(){
     try { return JSON.parse(localStorage.getItem(KEY) || '{}'); } catch(e){ return {}; }

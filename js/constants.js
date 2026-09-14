@@ -1,4 +1,4 @@
-// Shared constants for Level Devil engine + editor
+// Shared constants for Capevil engine + editor
 export const CELL = 40; // px per grid cell
 
 export const ENTITY_TYPES = {

@@ -1,7 +1,7 @@
 // Remappable player controls, persisted in this browser (no account needed)
 // so a player's preferred keys survive across visits. The engine reads
 // these through buildKeyMap() instead of a hardcoded table.
-const STORAGE_KEY = 'leveldevil_keybinds';
+const STORAGE_KEY = 'capevil_keybinds';
 
 export const ACTIONS = ['left', 'right', 'up', 'down', 'jump'];
 export const ACTION_LABELS = { left: 'Gauche', right: 'Droite', up: 'Haut', down: 'Bas', jump: 'Sauter' };
@@ -36,12 +36,12 @@ export function saveKeybinds(binds) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(binds)); } catch { /* ignore: private mode etc. */ }
   // Any live Engine instance listens for this to pick up the change without
   // needing a page reload (see engine.js's `_onKeybindsChanged`).
-  window.dispatchEvent(new Event('leveldevil:keybinds-changed'));
+  window.dispatchEvent(new Event('capevil:keybinds-changed'));
 }
 
 export function resetKeybinds() {
   try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
-  window.dispatchEvent(new Event('leveldevil:keybinds-changed'));
+  window.dispatchEvent(new Event('capevil:keybinds-changed'));
   return { ...DEFAULT_KEYBINDS };
 }
 

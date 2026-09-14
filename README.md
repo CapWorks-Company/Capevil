@@ -1,6 +1,6 @@
-# Level Devil — jeu + éditeur + niveaux communautaires
+# Capevil — jeu + éditeur + niveaux communautaires
 
-Un jeu de plateforme façon **Level Devil** : blocs (posés case par case et
+Un jeu de plateforme façon **Capevil** : blocs (posés case par case et
 assemblés sans jointure visible, y compris à la verticale) avec leurs
 propres bascules **traversable / invisible / tueur** (un bloc « tueur » tue
 le joueur au contact au lieu d'être un simple obstacle), pointes orientables
@@ -40,7 +40,12 @@ quel solide, et le joueur peut le pousser latéralement simplement en
 marchant dedans (bloqué net s'il n'y a pas la place). Un cube posé sur une
 **plaque de pression** l'actionne exactement comme le ferait le joueur — de
 quoi bâtir des casse-têtes de poids/pression sans avoir besoin du joueur
-lui-même sur la plaque.
+lui-même sur la plaque. Le poussage d'un cube approche désormais
+progressivement d'un obstacle (mur, bord de la grille…) au lieu de rejeter
+tout le déplacement dès que la distance restante devient plus petite qu'un
+seul pas de poussée — l'ancien comportement pouvait bloquer un cube « à
+distance » d'un obstacle pour de bon, l'empêchant même de rejoindre puis de
+franchir un trou d'exactement 1 bloc alors qu'il y avait pourtant la place.
 
 Sauter et se cogner la tête contre un plafond (ou un mur, selon le sens de
 la gravité) ne permet plus de resauter aussitôt : seul un vrai atterrissage
