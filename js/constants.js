@@ -164,3 +164,17 @@ export const RELEASE_MODE_LABELS = {
 // crate (see engine.js's _crateOverlapping) — 'both' preserves that.
 export const ACTIVATOR_MODES = ['player', 'crate', 'both'];
 export const ACTIVATOR_LABELS = { player: 'Joueur uniquement', crate: 'Caisse uniquement', both: 'Joueur ou caisse' };
+
+// PLATE-only: how its own "on press" action list (props.actions) behaves
+// while the activator is on it — see engine.js's _checkPlates. Mirrors the
+// legacy boolean `loop` (kept in sync for the old "∞" badge drawing code,
+// shared with TRIGGER/BUTTON) but this is the field the engine actually
+// branches on for PLATE. Separate from `props.releaseActions`, which always
+// fires once, forward only, when the activator leaves — see
+// engine.js's _firePlateRelease.
+export const PLATE_PRESS_MODES = ['once', 'hold', 'loop'];
+export const PLATE_PRESS_MODE_LABELS = {
+  once: 'Une fois (pas de répétition)',
+  hold: 'Tant que maintenu (répète tant qu\'on reste dessus)',
+  loop: 'Boucle infinie (ne s\'arrête plus une fois lancée)',
+};

@@ -1020,25 +1020,63 @@ export class Engine {
     }
   }
 
-  // A pressure plate repeats its actions for as long as the player (or a
-  // resting crate, depending on `activator`) stays on it (one cycle right
-  // away, then again every time the previous cycle finishes — forward every
-  // time by default, or alternating forward/reverse each cycle when
-  // "Inversement des actions" is on, same opt-in as a button), stopping the
-  // moment the activator leaves (past any releaseGrace) — unless "boucle
-  // infinie" is set, in which case one press starts a cycle that never
-  // stops.
+  // A pressure plate's press-side behavior depends on `props.pressMode`:
+  // 'once' fires its actions a single time per press (no repeat even if the
+  // activator stays on it); 'hold' (the historical default) repeats them for
+  // as long as the player (or a resting crate, depending on `activator`)
+  // stays on it — one cycle right away, then again every time the previous
+  // cycle finishes, stopping the moment the activator leaves; 'loop' ("boucle
+  // infinie") starts a cycle that never stops once pressed, regardless of
+  // whether the activator stays. All three can alternate forward/reverse
+  // each firing when "Inversement des actions" is on, same opt-in as a
+  // button. Independently, releasing the plate (leaving it, past any
+  // releaseGrace) fires its own separate one-shot action list — see
+  // _firePlateRelease — regardless of which press mode is active.
   _checkPlates() {
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.PLATE) continue;
+      const props = rt.def.props || {};
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
       const overlapping = this._graceOverlap(rt, this._activatorOverlap(rt, box));
       if (overlapping && !rt.wasOverlapping && this._canActivate(rt)) {
-        if (rt.def.props && rt.def.props.loop) this._activate(rt, () => this._fireLoop(rt));
+        const mode = props.pressMode || (props.loop ? 'loop' : 'hold');
+        if (mode === 'loop') this._activate(rt, () => this._fireLoop(rt));
+        else if (mode === 'once') this._activate(rt, () => this._fireTrigger(rt));
         else this._activate(rt, () => this._startHold(rt));
       }
+      if (!overlapping && rt.wasOverlapping) this._firePlateRelease(rt);
       if (!overlapping) rt.holding = false;
       rt.wasOverlapping = overlapping;
+    }
+  }
+
+  // Fires a PLATE's separate `props.releaseActions` list once, the moment
+  // the activator leaves it (already grace-adjusted by the `overlapping`
+  // reading in _checkPlates — a brief drop-out within releaseGrace never
+  // reaches here). Always plays forward, never alternated by `reversible`
+  // (that's a press-only concept: release is already a single momentary
+  // event, not something repeatedly activated) — and does nothing at all
+  // once the plate is fully disabled. `props.closeOnRelease` permanently
+  // closes the plate (same effect as releaseMode:'finishAndClose', but tied
+  // to the release firing finishing rather than the press-side actions).
+  _firePlateRelease(rt) {
+    if (rt.disabled) return;
+    const props = rt.def.props || {};
+    const actions = props.releaseActions || [];
+    if (!actions.length) {
+      if (props.closeOnRelease) rt.disabled = true;
+      return;
+    }
+    const sequential = !!props.sequential;
+    const offsets = this._actionOffsetsFor(actions, sequential);
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      const runAt = this.simTime + offsets[i];
+      this.scheduled.push({ time: runAt, run: () => this._runAction(action) });
+    }
+    if (props.closeOnRelease) {
+      const span = Math.max(0, this._actionsSpanFor(actions, sequential));
+      this.scheduled.push({ time: this.simTime + Math.max(0.1, span), run: () => { rt.disabled = true; } });
     }
   }
 
@@ -1083,6 +1121,13 @@ export class Engine {
   _actionOffsets(rt) {
     const actions = (rt.def.props && rt.def.props.actions) || [];
     const sequential = !!(rt.def.props && rt.def.props.sequential);
+    return this._actionOffsetsFor(actions, sequential);
+  }
+
+  // Same computation as _actionOffsets, but for an arbitrary action list —
+  // lets PLATE's separate `releaseActions` list (see _firePlateRelease)
+  // share this logic with the main `actions` list instead of duplicating it.
+  _actionOffsetsFor(actions, sequential) {
     const offsets = [];
     if (!sequential) {
       for (const a of actions) offsets.push(a.delay || 0);
@@ -1104,7 +1149,14 @@ export class Engine {
   // finish.
   _actionsSpan(rt) {
     const actions = (rt.def.props && rt.def.props.actions) || [];
-    const offsets = this._actionOffsets(rt);
+    const sequential = !!(rt.def.props && rt.def.props.sequential);
+    return this._actionsSpanFor(actions, sequential);
+  }
+
+  // Same computation as _actionsSpan, but for an arbitrary action list — see
+  // _actionOffsetsFor.
+  _actionsSpanFor(actions, sequential) {
+    const offsets = this._actionOffsetsFor(actions, sequential);
     let span = 0;
     for (let i = 0; i < actions.length; i++) {
       const a = actions[i];

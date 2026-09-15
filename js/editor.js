@@ -4,6 +4,7 @@ import {
   TELEPORTER_MAX_PER_FREQUENCY, TELEPORTER_FREQUENCIES,
   LAYER_MIN, LAYER_MAX, clampLayer,
   RELEASE_MODE_LABELS, ACTIVATOR_LABELS,
+  PLATE_PRESS_MODE_LABELS,
 } from './constants.js';
 import {
   createEmptyLevel, createEntity, createAction, cloneLevel, findEntity,
@@ -65,6 +66,10 @@ let showCoordOverlay = false; // true while a "Téléporter un élément" action
 let blockViewIds = new Set(); // entity ids currently showing their actions as "blocs" (see renderActionBlock) instead of the compact list
 let bottomTab = 'hierarchy'; // 'hierarchy' | 'actions' — which panel occupies the shared slot below the canvas
 let dragActionId = null; // action.id currently being dragged in the Actions panel, or null
+let actionsPanelTarget = 'press'; // 'press' | 'release' — for a PLATE only, which of its two action lists the
+                                   // Actions panel is currently showing (TRIGGER/BUTTON only ever have 'press').
+let lastActionsEntityId = null; // last entity id renderActionsPanel ran for — lets it reset actionsPanelTarget
+                                 // back to 'press' whenever the selection changes to a different entity.
 let hiddenLayers = new Set(); // `layer` values currently toggled off in the layers panel — a view filter only,
                                // never saved with the level and never touched by anything but that panel.
 
@@ -486,38 +491,76 @@ function renderActionsPanel() {
   if (!actionsPanelEl || bottomTab !== 'actions') return;
   const ent = (selectedId && selectedId !== 'playerstart' && selectedId !== 'playerstart2') ? findEntity(level, selectedId) : null;
   if (!ent || !hasActionListType(ent.type)) {
+    lastActionsEntityId = null;
     actionsPanelEl.innerHTML = `<p class="muted empty" style="font-size:12.5px;margin:4px 0;">Sélectionne un trigger, un bouton ou une plaque de pression pour assembler ses actions ici.</p>`;
     return;
   }
-  const actions = ent.props.actions || [];
+  // Switching to a different entity always lands back on its "press" list —
+  // only staying on the SAME plate preserves whichever sub-tab was open.
+  if (ent.id !== lastActionsEntityId) { actionsPanelTarget = 'press'; lastActionsEntityId = ent.id; }
+  const isPlate = ent.type === ENTITY_TYPES.PLATE;
+  const onRelease = isPlate && actionsPanelTarget === 'release';
+  const actions = (onRelease ? ent.props.releaseActions : ent.props.actions) || [];
   const blocksHtml = actions.map((a) => `
     <div class="action-block-slot" data-drag-id="${a.id}">${renderActionBlock(a)}</div>`).join('');
+  // A PLATE gets two little sub-tabs (its press list and its separate
+  // release list); TRIGGER/BUTTON only ever have the one list, no sub-tabs.
+  const subTabsHtml = isPlate ? `
+    <div class="ap-subtabs">
+      <button type="button" class="btn small${onRelease ? '' : ' active'}" id="ap-tab-press">⬇️ Appui</button>
+      <button type="button" class="btn small${onRelease ? ' active' : ''}" id="ap-tab-release">⬆️ Relâchement</button>
+    </div>` : '';
+  // The press list keeps its "Boucle infinie" checkbox for TRIGGER/BUTTON
+  // (unchanged); a PLATE's press list gets the fuller 3-way select instead
+  // (une fois / tant que maintenu / boucle) since it's no longer just a
+  // boolean. The release list has neither — it's inherently a single fire —
+  // and gets its own "fermer définitivement" checkbox instead.
+  const modeControlHtml = onRelease
+    ? `<label class="toggle-row" style="margin:0;"><input type="checkbox" id="ap-close-release" ${ent.props.closeOnRelease ? 'checked' : ''} />Fermer définitivement après</label>`
+    : (isPlate
+      ? `<label style="margin:0;display:flex;align-items:center;gap:6px;">À l'appui : ${selectHtml('ap-press-mode', PLATE_PRESS_MODE_LABELS, ent.props.pressMode || 'hold')}</label>`
+      : `<label class="toggle-row" style="margin:0;"><input type="checkbox" id="ap-loop" ${ent.props.loop ? 'checked' : ''} />Boucle infinie</label>`);
   actionsPanelEl.innerHTML = `
+    ${subTabsHtml}
     <div class="actions-panel-header">
       <span class="pill type-badge">${paletteLabel(ent.type)}</span>
-      <label class="toggle-row" style="margin:0;"><input type="checkbox" id="ap-loop" ${ent.props.loop ? 'checked' : ''} />Boucle infinie</label>
+      ${modeControlHtml}
       <span class="spacer"></span>
       <button type="button" class="btn small primary" id="ap-add-action">+ Ajouter une action</button>
     </div>
     <div id="actions-panel-list">
       ${blocksHtml || '<p class="muted empty" style="font-size:12.5px;">Aucune action pour l\'instant — clique « + Ajouter une action ».</p>'}
     </div>`;
-  bindActionsPanel(ent);
+  bindActionsPanel(ent, onRelease);
   if (previewMode) {
     actionsPanelEl.querySelectorAll('input, select, button, textarea').forEach((el) => { el.disabled = true; });
   }
 }
 
-function bindActionsPanel(ent) {
+function bindActionsPanel(ent, onRelease) {
+  const pressTab = document.getElementById('ap-tab-press');
+  const releaseTab = document.getElementById('ap-tab-release');
+  if (pressTab) pressTab.addEventListener('click', () => { actionsPanelTarget = 'press'; renderActionsPanel(); });
+  if (releaseTab) releaseTab.addEventListener('click', () => { actionsPanelTarget = 'release'; renderActionsPanel(); });
   const loopChk = document.getElementById('ap-loop');
   if (loopChk) loopChk.addEventListener('change', () => { ent.props.loop = loopChk.checked; render(); });
-  const addBtn = document.getElementById('ap-add-action');
-  if (addBtn) addBtn.addEventListener('click', () => {
-    ent.props.actions.push(createAction(ACTION_TYPES.MOVE_ELEMENT, { params: defaultParamsFor(ACTION_TYPES.MOVE_ELEMENT) }));
+  const pressModeSel = document.getElementById('ap-press-mode');
+  if (pressModeSel) pressModeSel.addEventListener('change', () => {
+    ent.props.pressMode = pressModeSel.value;
+    ent.props.loop = pressModeSel.value === 'loop'; // kept in sync — see createEntity's PLATE case
     render();
   });
-  (ent.props.actions || []).forEach((action) => bindActionRow(ent, action, actionsPanelEl));
-  bindActionDragAndDrop(ent);
+  const closeReleaseChk = document.getElementById('ap-close-release');
+  if (closeReleaseChk) closeReleaseChk.addEventListener('change', () => { ent.props.closeOnRelease = closeReleaseChk.checked; render(); });
+  const addBtn = document.getElementById('ap-add-action');
+  if (addBtn) addBtn.addEventListener('click', () => {
+    const list = onRelease ? ent.props.releaseActions : ent.props.actions;
+    list.push(createAction(ACTION_TYPES.MOVE_ELEMENT, { params: defaultParamsFor(ACTION_TYPES.MOVE_ELEMENT) }));
+    render();
+  });
+  const actions = (onRelease ? ent.props.releaseActions : ent.props.actions) || [];
+  actions.forEach((action) => bindActionRow(ent, action, actionsPanelEl, onRelease));
+  bindActionDragAndDrop(ent, onRelease);
 }
 
 // Manual pointer-driven drag-to-reorder (mousedown/mousemove/mouseup rather
@@ -528,8 +571,9 @@ function bindActionsPanel(ent) {
 // state so it's simple to reason about and test. Grabbing anywhere on a
 // card's header (`.block-head`, cursor: grab) and dragging it up/down over
 // another card shows which half you're hovering (`.drop-before` /
-// `.drop-after`) and reorders `ent.props.actions` in place on release.
-function bindActionDragAndDrop(ent) {
+// `.drop-after`) and reorders the active list (press or release — see
+// `onRelease`) in place on release.
+function bindActionDragAndDrop(ent, onRelease) {
   const list = document.getElementById('actions-panel-list');
   if (!list) return;
   list.querySelectorAll('.action-block-slot').forEach((slot) => {
@@ -556,7 +600,7 @@ function bindActionDragAndDrop(ent) {
         const draggedId = dragActionId;
         dragActionId = null;
         if (!overSlot || overSlot.dataset.dragId === draggedId) return;
-        const actions = ent.props.actions;
+        const actions = onRelease ? ent.props.releaseActions : ent.props.actions;
         const fromIdx = actions.findIndex((a) => a.id === draggedId);
         let toIdx = actions.findIndex((a) => a.id === overSlot.dataset.dragId);
         if (fromIdx === -1 || toIdx === -1) return;
@@ -686,15 +730,23 @@ function drawTriggerLinks() {
   if (!selectedId || selectedId === 'playerstart' || selectedId === 'playerstart2') return;
   const trig = findEntity(level, selectedId);
   if (!trig || !hasActionListType(trig.type) || isHiddenEntity(trig)) return;
-  const actions = (trig.props && trig.props.actions) || [];
+  drawActionLinksFor(trig, trig.props && trig.props.actions, 'rgba(255,255,255,0.85)');
+  // A PLATE's separate release list targets entities the same way — drawn
+  // in a different color so both sets of links stay distinguishable when
+  // shown at once.
+  if (trig.type === ENTITY_TYPES.PLATE) drawActionLinksFor(trig, trig.props && trig.props.releaseActions, 'rgba(120,200,255,0.85)');
+}
+
+function drawActionLinksFor(fromEnt, actions, color) {
+  actions = actions || [];
   if (!actions.length) return;
   ctx.save();
   ctx.setLineDash([5, 4]);
   ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-  ctx.fillStyle = ctx.strokeStyle;
-  const fromX = trig.x * CELL + (trig.w * CELL) / 2;
-  const fromY = trig.y * CELL + (trig.h * CELL) / 2;
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  const fromX = fromEnt.x * CELL + (fromEnt.w * CELL) / 2;
+  const fromY = fromEnt.y * CELL + (fromEnt.h * CELL) / 2;
   const seen = new Set();
   for (const action of actions) {
     if (!action.targetId || seen.has(action.targetId)) continue;
@@ -1274,7 +1326,13 @@ function bindPropsInputs(ent) {
   // below the canvas now, not here — see renderActionsPanel/bindActionsPanel.
   // This button just jumps you there for the currently-selected entity.
   const openActionsBtn = document.getElementById('open-actions-panel');
-  if (openActionsBtn) openActionsBtn.addEventListener('click', () => switchBottomTab('actions'));
+  if (openActionsBtn) openActionsBtn.addEventListener('click', () => { actionsPanelTarget = 'press'; switchBottomTab('actions'); });
+  // PLATE only: same idea, but jumps straight to its separate "Relâchement"
+  // sub-tab (see renderPlateReleaseEditor / renderActionsPanel).
+  const openReleaseBtn = document.getElementById('open-release-panel');
+  if (openReleaseBtn) openReleaseBtn.addEventListener('click', () => { actionsPanelTarget = 'release'; switchBottomTab('actions'); });
+  const closeOnReleaseChk = document.getElementById('p-close-on-release');
+  if (closeOnReleaseChk) closeOnReleaseChk.addEventListener('change', () => { ent.props.closeOnRelease = closeOnReleaseChk.checked; render(); renderProps(); });
 }
 
 function clampInt(v, min, max) { return Math.max(min, Math.min(max, Math.round(v))); }
@@ -1446,10 +1504,33 @@ function renderButtonEditor(ent) {
 }
 
 function renderPlateEditor(ent) {
-  const hint = ent.props.reversible
-    ? 'Tant que le joueur reste dessus, les actions se répètent automatiquement en alternant aller/retour à chaque cycle (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus.'
-    : 'Tant que le joueur reste dessus, les actions se répètent automatiquement dans le même sens (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus. Active « Inversement des actions » ci-dessous pour alterner aller/retour à chaque cycle.';
-  return renderActionListEditor('Plaque de pression', hint, 'Actions déclenchées', ent, renderReversibleCheckbox(ent)) + renderAdvancedActivation(ent);
+  const modeHint = {
+    once: 'Un seul passage joue ces actions une fois — rester dessus plus longtemps ne les rejoue pas.',
+    hold: 'Tant que le joueur (ou une caisse) reste dessus, ces actions se répètent automatiquement (elles s\'arrêtent dès qu\'il descend).',
+    loop: 'Un seul passage suffit à lancer une répétition de ces actions qui ne s\'arrête plus, même après être descendu.',
+  }[ent.props.pressMode || 'hold'];
+  const reversibleHint = ent.props.reversible ? ' Elles alternent aller/retour à chaque nouveau déclenchement.' : '';
+  return renderActionListEditor('Plaque de pression — à l\'appui', modeHint + reversibleHint, 'Actions à l\'appui', ent, renderReversibleCheckbox(ent))
+    + renderPlateReleaseEditor(ent)
+    + renderAdvancedActivation(ent);
+}
+
+// A PLATE's second, independent action list: fires once, forward only, the
+// moment the player (or crate) leaves it — completely separate from the
+// press-side behavior above (see engine.js's _firePlateRelease). Both lists
+// share the same "🧩 Assembler les actions" flow, just opening the Actions
+// panel on a different sub-tab (see renderActionsPanel's actionsPanelTarget).
+function renderPlateReleaseEditor(ent) {
+  const count = (ent.props.releaseActions || []).length;
+  const body = `
+    <p class="hint" style="margin-top:0;">Se joue une fois quand le joueur (ou la caisse) quitte la plaque — indépendant des actions à l'appui ci-dessus.</p>
+    <div class="row" style="align-items:center;margin-top:14px;">
+      <label style="margin:0;flex:1;">Actions au relâchement</label>
+      <span class="pill">${count} action${count === 1 ? '' : 's'}</span>
+    </div>
+    <button type="button" class="btn small primary" id="open-release-panel" style="width:100%;margin-top:8px;">🧩 Assembler les actions de relâchement</button>
+    <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-close-on-release" ${ent.props.closeOnRelease ? 'checked' : ''} />Fermer définitivement la plaque après (plus utilisable ensuite)</label>`;
+  return fieldGroup('Au relâchement', body);
 }
 
 function defaultParamsFor(type) {
@@ -1642,7 +1723,7 @@ function playerTargetButtons(action, allowPlayer) {
   return html;
 }
 
-function bindActionRow(ent, action, container = propsEl) {
+function bindActionRow(ent, action, container = propsEl, onRelease = false) {
   const row = container.querySelector(`.action-item[data-action="${action.id}"]`);
   if (!row) return;
   row.querySelectorAll('[data-f]').forEach((el) => {
@@ -1669,7 +1750,8 @@ function bindActionRow(ent, action, container = propsEl) {
   bindOptionalFields(action, row);
   const removeBtn = row.querySelector('[data-remove-action]');
   if (removeBtn) removeBtn.addEventListener('click', () => {
-    ent.props.actions = ent.props.actions.filter((a) => a.id !== action.id);
+    if (onRelease) ent.props.releaseActions = ent.props.releaseActions.filter((a) => a.id !== action.id);
+    else ent.props.actions = ent.props.actions.filter((a) => a.id !== action.id);
     render();
   });
   const pickBtn = row.querySelector('[data-pick-target]');

@@ -1,5 +1,5 @@
 // Level data model: plain-JSON-serializable structures shared by the game and the editor.
-import { ENTITY_TYPES, ACTION_TYPES, DEFAULT_GRID, GRID_LIMITS, TELEPORTER_MAX_PER_FREQUENCY, clampLayer, RELEASE_MODES, ACTIVATOR_MODES } from './constants.js';
+import { ENTITY_TYPES, ACTION_TYPES, DEFAULT_GRID, GRID_LIMITS, TELEPORTER_MAX_PER_FREQUENCY, clampLayer, RELEASE_MODES, ACTIVATOR_MODES, PLATE_PRESS_MODES } from './constants.js';
 
 // Shared default set of the extended activation params added to TRIGGER,
 // BUTTON and PLATE alike (see engine.js's _fireTrigger/_activate/_canActivate
@@ -127,7 +127,18 @@ export function createEntity(type, x, y, overrides = {}, level = null) {
       break;
     case ENTITY_TYPES.PLATE:
       base.w = 1; base.h = 1;
-      base.props = { actions: [], loop: false, reversible: false, facing: 'up', ...defaultActivationProps(type) };
+      // `pressMode` ('once'|'hold'|'loop') governs the *press*-side actions
+      // above — `loop` is kept in sync with it (true iff pressMode==='loop')
+      // purely so the shared "∞" badge-drawing code (editor.js/engine.js,
+      // also used by TRIGGER/BUTTON) keeps working without special-casing
+      // PLATE. `releaseActions`/`closeOnRelease` are a second, independent
+      // action list that fires once, forward only, when the activator
+      // leaves the plate — see engine.js's _firePlateRelease.
+      base.props = {
+        actions: [], loop: false, reversible: false, facing: 'up',
+        pressMode: 'hold', releaseActions: [], closeOnRelease: false,
+        ...defaultActivationProps(type),
+      };
       break;
     case ENTITY_TYPES.CRATE:
       // Same footprint as a block by default; freely resizable (a bigger
@@ -179,6 +190,11 @@ export function removeEntity(level, id) {
   for (const ent of level.entities) {
     if (hasActionList(ent) && ent.props && ent.props.actions) {
       ent.props.actions = ent.props.actions.filter(a => a.targetId !== id);
+    }
+    // A PLATE's separate "on release" list is its own action list, targeting
+    // entities the exact same way — same cleanup applies to it.
+    if (ent.type === ENTITY_TYPES.PLATE && ent.props && ent.props.releaseActions) {
+      ent.props.releaseActions = ent.props.releaseActions.filter(a => a.targetId !== id);
     }
   }
 }
@@ -304,6 +320,31 @@ export function normalizeLevel(rawLevel) {
       // activations (see engine.js's _fireTrigger) — otherwise it always
       // plays its actions forward, every time.
       e.props.reversible = !!e.props.reversible;
+    }
+    if (e.type === ENTITY_TYPES.PLATE) {
+      // `pressMode` is new; older saved levels only have the `loop`
+      // boolean, which this derives from exactly (so an old plate's press
+      // behavior is completely unchanged: loop:true -> 'loop', otherwise
+      // the pre-existing "repeat while held" -> 'hold'). Once set, `loop`
+      // is kept mirroring it going forward (see createEntity's PLATE case).
+      e.props.pressMode = PLATE_PRESS_MODES.includes(e.props.pressMode)
+        ? e.props.pressMode
+        : (e.props.loop ? 'loop' : 'hold');
+      e.props.loop = e.props.pressMode === 'loop';
+      e.props.closeOnRelease = !!e.props.closeOnRelease;
+      // A lightweight normalization (not the full legacy-migration pass
+      // below, which handles concepts — old dx/dy, old player actions —
+      // that never existed for this brand-new field) so hand-edited or
+      // imported JSON can't crash the engine/editor.
+      e.props.releaseActions = Array.isArray(e.props.releaseActions)
+        ? e.props.releaseActions.filter((a) => a && a.type).map((a) => ({
+          id: a.id || uid('act'),
+          type: a.type,
+          delay: Math.max(0, Number(a.delay) || 0),
+          targetId: a.targetId ?? null,
+          params: { ...(a.params || {}) },
+        }))
+        : [];
     }
     if (hasActionList(e)) {
       // Extended activation params (see level-model.js's
