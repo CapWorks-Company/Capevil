@@ -31,6 +31,8 @@
       <button class="btn small" id="new-level">Nouveau</button>
       <button class="btn small" id="load-demo">🎓 Charger la démo</button>
       <button class="btn small" id="save-local">💾 Sauver (local)</button>
+      <button class="btn small" id="undo-btn" title="Annuler (Ctrl+Z)">↩️ Annuler</button>
+      <button class="btn small" id="redo-btn" title="Rétablir (Ctrl+Maj+Z)">↪️ Rétablir</button>
       <button class="btn small" id="export-json">⭳ Exporter JSON</button>
       <label class="btn small" style="cursor:pointer;">⭱ Importer JSON<input type="file" id="import-json" accept="application/json" style="display:none;" /></label>
       <button class="btn small accent" id="playtest-btn">▶ Tester le niveau</button>
@@ -68,18 +70,32 @@
         </div>
       </div>
 
+      <label style="font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-top:20px;">Décaler la grille</label>
+      <p class="muted" style="font-size:12px;margin:4px 0 8px;line-height:1.4;">Agrandir la grille n'ajoute de la place qu'en bas / à droite. Pour faire de la place ailleurs (ex. en haut), décale tout le contenu déjà placé — joueur(s) compris — plutôt que de tout redéplacer à la main.</p>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div id="grid-shift-pad" style="display:grid;grid-template-columns:repeat(3,32px);grid-template-rows:repeat(3,32px);gap:3px;">
+          <span></span><button type="button" class="btn small" id="shift-up" title="Décaler vers le haut">↑</button><span></span>
+          <button type="button" class="btn small" id="shift-left" title="Décaler vers la gauche">←</button><span></span><button type="button" class="btn small" id="shift-right" title="Décaler vers la droite">→</button>
+          <span></span><button type="button" class="btn small" id="shift-down" title="Décaler vers le bas">↓</button><span></span>
+        </div>
+        <div>
+          <span class="muted" style="font-size:12px;">Pas (cases)</span>
+          <input type="number" id="shift-step" value="1" min="1" max="30" style="width:80px;margin-top:4px;display:block;" />
+        </div>
+      </div>
+
       <label style="font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-top:20px;">Physique &amp; décor</label>
       <div style="display:flex;gap:10px;margin-top:6px;align-items:flex-end;">
         <div style="flex:1;">
-          <span class="muted" style="font-size:12px;">Gravité (x normal)</span>
-          <input type="number" id="ws-gravity" step="0.1" min="0.1" max="5" style="width:100%;margin-top:4px;" />
+          <span class="muted" style="font-size:12px;">Gravité (x normal, négatif = inversée)</span>
+          <input type="number" id="ws-gravity" step="0.1" min="-5" max="5" style="width:100%;margin-top:4px;" />
         </div>
         <div style="flex:1;">
           <span class="muted" style="font-size:12px;">Fond d'écran</span>
           <input type="color" id="ws-bg" style="width:100%;margin-top:4px;height:34px;padding:2px;" />
         </div>
       </div>
-      <p class="muted" style="font-size:12px;margin:8px 0 0;line-height:1.4;">La taille de la grille est la seule chose que « Changer l'état du monde » ne peut pas modifier en jeu — la gravité et le fond d'écran, si.</p>
+      <p class="muted" style="font-size:12px;margin:8px 0 0;line-height:1.4;">La taille de la grille est la seule chose que « Changer l'état du monde » ne peut pas modifier en jeu — la gravité et le fond d'écran, si. Une gravité négative inverse le sens de la chute pour le joueur (et pour les cubes poussables, sauf ceux dont la propre gravité compense).</p>
 
       <label style="font-size:11.5px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.4px;display:block;margin-top:20px;">Physique avancée</label>
       <label class="toggle-row" style="margin-top:8px;"><input type="checkbox" id="ws-ceiling-glitch" />Glitch du plafond (saut infini)</label>
@@ -91,8 +107,19 @@
   <div class="container" style="max-width:1300px;">
     <p id="status-msg" class="muted" style="min-height:18px;"></p>
     <div class="editor-layout">
-      <div id="toolbox"></div>
-      <div id="stage-scroll"><canvas id="stage" width="1440" height="560"></canvas></div>
+      <div class="editor-left">
+        <div id="toolbox"></div>
+        <div id="layers-panel"></div>
+      </div>
+      <div class="editor-center">
+        <div id="stage-scroll"><canvas id="stage" width="1440" height="560"></canvas></div>
+        <div id="bottom-tabs">
+          <button type="button" class="btn small active" id="tab-hierarchy">🗂️ Hiérarchie</button>
+          <button type="button" class="btn small" id="tab-actions">🧩 Actions</button>
+        </div>
+        <div id="hierarchy"></div>
+        <div id="actions-panel" class="hidden"></div>
+      </div>
       <div id="props"></div>
     </div>
   </div>

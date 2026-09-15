@@ -2,7 +2,8 @@ import {
   CELL, ENTITY_TYPES, ACTION_TYPES, GRAVITY_DIRS, GRID_LIMITS,
   ENTITY_TOGGLES, TOGGLE_LABELS, togglesForType, FACING_LABELS,
   TELEPORTER_MAX_PER_FREQUENCY, TELEPORTER_FREQUENCIES,
-  LAYERS, LAYER_LABELS, clampLayer,
+  LAYER_MIN, LAYER_MAX, clampLayer,
+  RELEASE_MODE_LABELS, ACTIVATOR_LABELS,
 } from './constants.js';
 import {
   createEmptyLevel, createEntity, createAction, cloneLevel, findEntity,
@@ -24,7 +25,6 @@ const PALETTE = [
   { type: ENTITY_TYPES.SPRING, label: 'Ressort (haut/bas)', color: '#ffd166', icon: '🌀' },
   { type: ENTITY_TYPES.FAN, label: 'Ventilateur (vent)', color: '#48cae4', icon: '🌬️' },
   { type: ENTITY_TYPES.SPINNER, label: 'Roue tournante', color: '#c9184a', icon: '⚙️' },
-  { type: ENTITY_TYPES.PLATFORM, label: 'Plateforme mobile', color: '#2d6cdf', icon: '🛗' },
   { type: ENTITY_TYPES.TELEPORTER, label: 'Téléporteur', color: '#9d4edd', icon: '🛸' },
   { type: ENTITY_TYPES.CHECKPOINT, label: 'Checkpoint', color: '#118ab2', icon: '🚩' },
   { type: ENTITY_TYPES.GOAL, label: 'Arrivée (but)', color: '#2ec4b6', icon: '🏆' },
@@ -62,11 +62,19 @@ let session = null;       // current Supabase Auth session, kept in sync via onA
 let editingRemoteId = null; // set when this editor session is editing an already-published level
 let previewMode = false;  // read-only admin preview: full editor view, nothing can be changed/saved
 let showCoordOverlay = false; // true while a "Téléporter un élément" action's x/y field has focus
+let blockViewIds = new Set(); // entity ids currently showing their actions as "blocs" (see renderActionBlock) instead of the compact list
+let bottomTab = 'hierarchy'; // 'hierarchy' | 'actions' — which panel occupies the shared slot below the canvas
+let dragActionId = null; // action.id currently being dragged in the Actions panel, or null
+let hiddenLayers = new Set(); // `layer` values currently toggled off in the layers panel — a view filter only,
+                               // never saved with the level and never touched by anything but that panel.
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
 const toolboxEl = document.getElementById('toolbox');
 const propsEl = document.getElementById('props');
+const hierarchyEl = document.getElementById('hierarchy');
+const actionsPanelEl = document.getElementById('actions-panel');
+const layersPanelEl = document.getElementById('layers-panel');
 const titleInput = document.getElementById('level-title-input');
 const authorInput = document.getElementById('level-author-input');
 const colsInput = document.getElementById('cols-input');
@@ -82,6 +90,107 @@ function setStatus(msg, isError = false) {
   statusEl.style.color = isError ? '#ff8a8a' : 'var(--muted)';
   if (msg) setTimeout(() => { if (statusEl.textContent === msg) statusEl.textContent = ''; }, 4000);
 }
+
+// ---------------------------------------------------------------- undo / redo
+// Snapshot-based rather than instrumented at every mutation call site: there
+// are dozens of scattered places `level` gets mutated (props-panel field
+// bindings, palette placement, canvas clicks, hierarchy clicks, the world-
+// condition modal…) and instrumenting each one individually is exactly the
+// kind of thing that quietly goes stale the next time a feature is added.
+// Instead we watch the whole document for click/change/keyup — the DOM
+// events every one of those mutations is ultimately driven by — and, a tick
+// later (so the handler has already finished mutating `level`), compare its
+// serialized JSON against the last recorded snapshot. Any difference becomes
+// one undo step. This is deliberately named `undoStack`/`undoIndex`, NOT
+// `history` — editor.js already uses the bare global `history` (the
+// browser's own History API, see "Sauver (local)"'s `history.replaceState`)
+// and a module-level `let history = …` would silently shadow it everywhere.
+const UNDO_LIMIT = 200;
+let undoStack = [];   // JSON strings, oldest first
+let undoIndex = -1;   // index into undoStack matching the CURRENT level state
+let lastSnapshot = null;
+let suppressUndoCapture = false; // true while undo()/redo() itself is restoring a snapshot, so that restore doesn't get re-captured as a new edit
+
+function snapshotLevel() { return JSON.stringify(level); }
+
+// Called once `level` is in its real starting state (after init(), and again
+// after "Nouveau", "Charger la démo" or "Importer JSON" fully replace it) —
+// resets the undo stack to a single entry so Ctrl+Z can never reach back
+// into a previous, now-irrelevant level.
+function initUndoHistory() {
+  const snap = snapshotLevel();
+  undoStack = [snap];
+  undoIndex = 0;
+  lastSnapshot = snap;
+  updateUndoRedoButtons();
+}
+
+function captureUndoStep() {
+  if (suppressUndoCapture || !level) return;
+  const snap = snapshotLevel();
+  if (snap === lastSnapshot) return; // nothing actually changed
+  undoStack = undoStack.slice(0, undoIndex + 1); // drop any redo branch
+  undoStack.push(snap);
+  if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  undoIndex = undoStack.length - 1;
+  lastSnapshot = snap;
+  updateUndoRedoButtons();
+}
+function scheduleUndoCapture() { setTimeout(captureUndoStep, 0); }
+document.addEventListener('click', scheduleUndoCapture, true);
+document.addEventListener('change', scheduleUndoCapture, true);
+document.addEventListener('keyup', scheduleUndoCapture, true);
+
+function restoreUndoSnapshot(snap) {
+  suppressUndoCapture = true;
+  level = normalizeLevel(JSON.parse(snap));
+  lastSnapshot = snap;
+  selectedId = null;
+  pickingTargetFor = null;
+  pickBanner.classList.add('hidden');
+  tool = 'select';
+  syncHeaderInputs();
+  buildPalette();
+  resizeCanvas();
+  render();
+  renderProps();
+  updateUndoRedoButtons();
+  suppressUndoCapture = false;
+}
+function undo() {
+  if (previewMode || playtesting || undoIndex <= 0) return;
+  undoIndex--;
+  restoreUndoSnapshot(undoStack[undoIndex]);
+}
+function redo() {
+  if (previewMode || playtesting || undoIndex >= undoStack.length - 1) return;
+  undoIndex++;
+  restoreUndoSnapshot(undoStack[undoIndex]);
+}
+function updateUndoRedoButtons() {
+  const undoBtn = document.getElementById('undo-btn');
+  const redoBtn = document.getElementById('redo-btn');
+  if (undoBtn) undoBtn.disabled = previewMode || playtesting || undoIndex <= 0;
+  if (redoBtn) redoBtn.disabled = previewMode || playtesting || undoIndex >= undoStack.length - 1;
+}
+// Ctrl+Z / Cmd+Z to undo, Ctrl+Shift+Z (or Ctrl+Y) to redo — but not while the
+// keybind-rebind modal is actively capturing a keypress (its own capture-
+// phase listener in keybind-ui.js calls preventDefault() in that case, which
+// we detect via e.defaultPrevented since it always runs before this bubble-
+// phase listener), and not while typing in the level-title text field, so
+// the browser's native undo-within-a-text-field still works there.
+document.addEventListener('keydown', (e) => {
+  if (e.defaultPrevented) return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const key = e.key.toLowerCase();
+  const isUndo = key === 'z' && !e.shiftKey;
+  const isRedo = (key === 'z' && e.shiftKey) || key === 'y';
+  if (!isUndo && !isRedo) return;
+  const active = document.activeElement;
+  if (active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type === 'text'))) return;
+  e.preventDefault();
+  if (isRedo) redo(); else undo();
+});
 
 // ---------------------------------------------------------------- init
 async function init() {
@@ -132,8 +241,11 @@ async function init() {
   resizeCanvas();
   render();
   renderProps();
+  initUndoHistory();
   bindToolbar();
   bindCanvas();
+  bindBottomTabs();
+  bindLayersPanel();
   mountKeybindButton(document.getElementById('keybind-bar'));
   mountAudioButton(document.getElementById('audio-bar'));
   if (previewMode) applyPreviewModeUI();
@@ -203,7 +315,8 @@ function applyPreviewModeUI() {
   if (banner) banner.classList.remove('hidden');
   if (toolboxEl) toolboxEl.style.display = 'none';
   tool = 'select';
-  ['new-level', 'load-demo', 'save-local', 'export-json', 'publish-btn', 'level-settings-btn']
+  ['new-level', 'load-demo', 'save-local', 'undo-btn', 'redo-btn', 'export-json', 'publish-btn', 'level-settings-btn',
+    'shift-up', 'shift-down', 'shift-left', 'shift-right', 'shift-step']
     .forEach((id) => { const el = document.getElementById(id); if (el) el.disabled = true; });
   const importInput = document.getElementById('import-json');
   if (importInput) { importInput.disabled = true; importInput.closest('label')?.classList.add('hidden'); }
@@ -227,7 +340,12 @@ function buildPalette() {
   const selectBtn = paletteButton('select', 'Sélection / déplacer', '#888', '↖️');
   const eraseBtn = paletteButton('erase', 'Gomme', '#555', '🧽');
   const startBtn = paletteButton('playerstart', 'Départ joueur', '#f77f00', '🧍');
-  toolboxEl.append(selectBtn, startBtn, eraseBtn);
+  // "2 joueurs": placing this the first time turns the second player on for
+  // this level (see handleCellClick); it stays available afterward to move
+  // player 2's spawn, and can be removed again from its own props panel
+  // (renderPlayerStartProps).
+  const start2Btn = paletteButton('playerstart2', level.playerStart2 ? 'Départ joueur 2' : 'Départ joueur 2 (activer)', '#2ec4ff', '🧍');
+  toolboxEl.append(selectBtn, startBtn, start2Btn, eraseBtn);
   const hr = document.createElement('hr');
   hr.className = 'toolbox-sep';
   toolboxEl.appendChild(hr);
@@ -241,6 +359,12 @@ function paletteButton(toolId, label, color, icon = '') {
   btn.innerHTML = `<span class="palette-swatch" style="background:${color}">${icon}</span>${label}`;
   btn.addEventListener('click', () => { tool = toolId; selectedId = null; buildPalette(); render(); renderProps(); });
   return btn;
+}
+
+// True while `ent` sits on a `layer` value currently hidden in the layers
+// panel — a pure editor view-state check, never persisted with the level.
+function isHiddenEntity(ent) {
+  return !!ent && hiddenLayers.has(clampLayer(ent.layer || 0));
 }
 
 // ---------------------------------------------------------------- rendering (static edit view)
@@ -257,39 +381,311 @@ function render() {
   // layer>0 in front of it — a stable sort keeps layer-0 entities in their
   // original order so an untouched level looks exactly as before.
   const layerSorted = [...level.entities].sort((a, b) => (a.layer || 0) - (b.layer || 0));
-  for (const ent of layerSorted) { if ((ent.layer || 0) <= 0) drawEntity(ent); }
+  for (const ent of layerSorted) { if ((ent.layer || 0) <= 0 && !isHiddenEntity(ent)) drawEntity(ent); }
   drawTriggerLinks();
   if (showCoordOverlay) drawCoordOverlay();
 
-  // player start marker
+  // player start marker(s) — player 2's uses the same blue as its in-game
+  // sprite (see engine.js's _renderPlayer) so the two are never confused.
   const ps = level.playerStart;
   ctx.fillStyle = 'rgba(247,127,0,0.85)';
   ctx.fillRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
   ctx.strokeStyle = '#fff'; ctx.strokeRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
   if (ps.invisible) { ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('👻', ps.x * CELL + CELL / 2, ps.y * CELL + CELL / 2 + 4); }
+  const ps2 = level.playerStart2;
+  if (ps2) {
+    ctx.fillStyle = 'rgba(46,196,255,0.85)';
+    ctx.fillRect(ps2.x * CELL + 6, ps2.y * CELL + 6, CELL - 12, CELL - 12);
+    ctx.strokeStyle = '#fff'; ctx.strokeRect(ps2.x * CELL + 6, ps2.y * CELL + 6, CELL - 12, CELL - 12);
+    if (ps2.invisible) { ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('👻', ps2.x * CELL + CELL / 2, ps2.y * CELL + CELL / 2 + 4); }
+  }
 
-  for (const ent of layerSorted) { if ((ent.layer || 0) > 0) drawEntity(ent); }
+  for (const ent of layerSorted) { if ((ent.layer || 0) > 0 && !isHiddenEntity(ent)) drawEntity(ent); }
 
   if (selectedId === 'playerstart') {
     ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
     ctx.strokeRect(ps.x * CELL - 2, ps.y * CELL - 2, CELL + 4, CELL + 4);
+  } else if (selectedId === 'playerstart2' && ps2) {
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+    ctx.strokeRect(ps2.x * CELL - 2, ps2.y * CELL - 2, CELL + 4, CELL + 4);
   } else if (selectedId) {
     const ent = findEntity(level, selectedId);
-    if (ent) {
+    if (ent && !isHiddenEntity(ent)) {
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       ctx.strokeRect(ent.x * CELL - 2, ent.y * CELL - 2, ent.w * CELL + 4, ent.h * CELL + 4);
     }
   }
+  renderBottomPanel();
+  renderLayersPanel();
+}
+
+// ---------------------------------------------------------------- hierarchy / actions tab
+// Hiérarchie and Actions share one slot below the canvas — switching tabs
+// just swaps which of the two divs is visible, no layout reflow. Called from
+// render() so both panels always reflect the current selection/edits.
+function renderBottomPanel() {
+  if (hierarchyEl) hierarchyEl.classList.toggle('hidden', bottomTab !== 'hierarchy');
+  if (actionsPanelEl) actionsPanelEl.classList.toggle('hidden', bottomTab !== 'actions');
+  renderHierarchy();
+  renderActionsPanel();
+}
+
+function switchBottomTab(tab) {
+  bottomTab = tab;
+  const hTab = document.getElementById('tab-hierarchy');
+  const aTab = document.getElementById('tab-actions');
+  if (hTab) hTab.classList.toggle('active', tab === 'hierarchy');
+  if (aTab) aTab.classList.toggle('active', tab === 'actions');
+  renderBottomPanel();
+}
+
+function bindBottomTabs() {
+  const hTab = document.getElementById('tab-hierarchy');
+  const aTab = document.getElementById('tab-actions');
+  if (hTab) hTab.addEventListener('click', () => switchBottomTab('hierarchy'));
+  if (aTab) aTab.addEventListener('click', () => switchBottomTab('actions'));
+}
+
+// One delegated listener bound once on the stable #layers-panel element
+// (never itself replaced — only its innerHTML is, on every renderLayersPanel
+// call), instead of rebinding a listener to each row button on every
+// render. See the comment in renderLayersPanel for why per-button listeners
+// aren't safe here.
+function bindLayersPanel() {
+  if (!layersPanelEl) return;
+  // Clicking a row right after editing a numeric props field (typically
+  // "Couche" itself) would otherwise blur that field first — committing its
+  // value via a native 'change' event and re-rendering this very panel
+  // mid-click. If that swaps out the row under the pointer between
+  // mousedown and mouseup, some browsers drop the click entirely. Stopping
+  // the mousedown's default focus-shift keeps the field focused (its value
+  // still commits normally whenever it's blurred some other way) so the
+  // click always lands on a stable, still-attached target.
+  layersPanelEl.addEventListener('mousedown', (e) => {
+    if (e.target.closest('[data-layer], #layers-show-all')) e.preventDefault();
+  });
+  layersPanelEl.addEventListener('click', (e) => {
+    if (e.target.closest('#layers-show-all')) { hiddenLayers.clear(); render(); return; }
+    const row = e.target.closest('[data-layer]');
+    if (!row) return;
+    const l = Number(row.dataset.layer);
+    if (hiddenLayers.has(l)) hiddenLayers.delete(l); else hiddenLayers.add(l);
+    render();
+  });
+}
+
+// The Actions panel: a Scratch-like canvas for the CURRENTLY SELECTED
+// trigger/bouton/plaque's action list — the same "block" cards as before
+// (see renderActionBlock), but given the whole bottom slot instead of the
+// narrow props panel, and drag-and-drop reorderable. Selecting something
+// else (or nothing, or the player spawn) just shows a placeholder — it never
+// changes tabs on its own, so flipping through entities while this tab is
+// open stays on the Actions tab.
+function renderActionsPanel() {
+  if (!actionsPanelEl || bottomTab !== 'actions') return;
+  const ent = (selectedId && selectedId !== 'playerstart' && selectedId !== 'playerstart2') ? findEntity(level, selectedId) : null;
+  if (!ent || !hasActionListType(ent.type)) {
+    actionsPanelEl.innerHTML = `<p class="muted empty" style="font-size:12.5px;margin:4px 0;">Sélectionne un trigger, un bouton ou une plaque de pression pour assembler ses actions ici.</p>`;
+    return;
+  }
+  const actions = ent.props.actions || [];
+  const blocksHtml = actions.map((a) => `
+    <div class="action-block-slot" data-drag-id="${a.id}">${renderActionBlock(a)}</div>`).join('');
+  actionsPanelEl.innerHTML = `
+    <div class="actions-panel-header">
+      <span class="pill type-badge">${paletteLabel(ent.type)}</span>
+      <label class="toggle-row" style="margin:0;"><input type="checkbox" id="ap-loop" ${ent.props.loop ? 'checked' : ''} />Boucle infinie</label>
+      <span class="spacer"></span>
+      <button type="button" class="btn small primary" id="ap-add-action">+ Ajouter une action</button>
+    </div>
+    <div id="actions-panel-list">
+      ${blocksHtml || '<p class="muted empty" style="font-size:12.5px;">Aucune action pour l\'instant — clique « + Ajouter une action ».</p>'}
+    </div>`;
+  bindActionsPanel(ent);
+  if (previewMode) {
+    actionsPanelEl.querySelectorAll('input, select, button, textarea').forEach((el) => { el.disabled = true; });
+  }
+}
+
+function bindActionsPanel(ent) {
+  const loopChk = document.getElementById('ap-loop');
+  if (loopChk) loopChk.addEventListener('change', () => { ent.props.loop = loopChk.checked; render(); });
+  const addBtn = document.getElementById('ap-add-action');
+  if (addBtn) addBtn.addEventListener('click', () => {
+    ent.props.actions.push(createAction(ACTION_TYPES.MOVE_ELEMENT, { params: defaultParamsFor(ACTION_TYPES.MOVE_ELEMENT) }));
+    render();
+  });
+  (ent.props.actions || []).forEach((action) => bindActionRow(ent, action, actionsPanelEl));
+  bindActionDragAndDrop(ent);
+}
+
+// Manual pointer-driven drag-to-reorder (mousedown/mousemove/mouseup rather
+// than native HTML5 draggable/dragstart/dragover/drop) — closer to how
+// Scratch's own block canvas actually feels (native browser DnD tends to
+// look janky: a semi-transparent ghost, no touch support, inconsistent
+// cross-browser behavior), and it's driven entirely by this module's own
+// state so it's simple to reason about and test. Grabbing anywhere on a
+// card's header (`.block-head`, cursor: grab) and dragging it up/down over
+// another card shows which half you're hovering (`.drop-before` /
+// `.drop-after`) and reorders `ent.props.actions` in place on release.
+function bindActionDragAndDrop(ent) {
+  const list = document.getElementById('actions-panel-list');
+  if (!list) return;
+  list.querySelectorAll('.action-block-slot').forEach((slot) => {
+    const handle = slot.querySelector('.block-drag-handle');
+    if (!handle) return;
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragActionId = slot.dataset.dragId;
+      slot.classList.add('dragging');
+      const onMove = (moveEvt) => {
+        const overSlot = document.elementFromPoint(moveEvt.clientX, moveEvt.clientY)?.closest('.action-block-slot');
+        list.querySelectorAll('.action-block-slot').forEach((s) => s.classList.remove('drop-before', 'drop-after'));
+        if (!overSlot || overSlot.dataset.dragId === dragActionId) return;
+        const r = overSlot.getBoundingClientRect();
+        const before = moveEvt.clientY < r.top + r.height / 2;
+        overSlot.classList.add(before ? 'drop-before' : 'drop-after');
+      };
+      const onUp = (upEvt) => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        slot.classList.remove('dragging');
+        const overSlot = document.elementFromPoint(upEvt.clientX, upEvt.clientY)?.closest('.action-block-slot');
+        list.querySelectorAll('.action-block-slot').forEach((s) => s.classList.remove('drop-before', 'drop-after'));
+        const draggedId = dragActionId;
+        dragActionId = null;
+        if (!overSlot || overSlot.dataset.dragId === draggedId) return;
+        const actions = ent.props.actions;
+        const fromIdx = actions.findIndex((a) => a.id === draggedId);
+        let toIdx = actions.findIndex((a) => a.id === overSlot.dataset.dragId);
+        if (fromIdx === -1 || toIdx === -1) return;
+        const [moved] = actions.splice(fromIdx, 1);
+        if (fromIdx < toIdx) toIdx--; // account for the shift after removal
+        const r = overSlot.getBoundingClientRect();
+        const before = upEvt.clientY < r.top + r.height / 2;
+        actions.splice(before ? toIdx : toIdx + 1, 0, moved);
+        render();
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
+// ---------------------------------------------------------------- hierarchy panel
+// Lists every placed entity (plus the player spawn) front-to-back — the same
+// stacking order the canvas itself draws in (see render(), above) — so an
+// author can find and click something they can't easily pick out on a
+// crowded or overlapping grid, instead of relying purely on canvas clicks.
+// Purely a selection aid: it never reorders or edits anything itself, it
+// just drives the same `selectedId` the canvas click handler does.
+function renderHierarchy() {
+  if (!hierarchyEl) return;
+  const rows = [
+    ...level.entities.map((ent) => ({ kind: 'entity', ent, sortLayer: ent.layer || 0 })),
+    { kind: 'playerstart', sortLayer: 0.5 }, // matches render()'s own <=0 / player / >0 draw split
+  ];
+  if (level.playerStart2) rows.push({ kind: 'playerstart2', sortLayer: 0.5 });
+  rows.sort((a, b) => b.sortLayer - a.sortLayer); // front (highest layer) first
+
+  const html = [`<div class="section-title">🗂️ Hiérarchie <span class="pill">${level.entities.length}</span></div>`];
+  if (!level.entities.length) {
+    html.push('<p class="muted empty">Aucun élément placé pour l\'instant.</p>');
+  }
+  for (const row of rows) {
+    if (row.kind === 'playerstart') {
+      const active = selectedId === 'playerstart' ? ' active' : '';
+      const ps = level.playerStart;
+      html.push(`<button type="button" class="hierarchy-row${active}" data-hid="playerstart">
+        <span class="hswatch" style="background:rgba(247,127,0,0.85);">🏃</span>
+        <span class="hlabel">Départ joueur${level.playerStart2 ? ' 1' : ''}</span>
+        <span class="hlayer">(${ps.x},${ps.y})</span>
+      </button>`);
+      continue;
+    }
+    if (row.kind === 'playerstart2') {
+      const active = selectedId === 'playerstart2' ? ' active' : '';
+      const ps2 = level.playerStart2;
+      html.push(`<button type="button" class="hierarchy-row${active}" data-hid="playerstart2">
+        <span class="hswatch" style="background:rgba(46,196,255,0.85);">🧍</span>
+        <span class="hlabel">Départ joueur 2</span>
+        <span class="hlayer">(${ps2.x},${ps2.y})</span>
+      </button>`);
+      continue;
+    }
+    const ent = row.ent;
+    const pal = PALETTE.find((p) => p.type === ent.type);
+    const active = selectedId === ent.id ? ' active' : '';
+    const layerVal = clampLayer(ent.layer ?? 0);
+    // Still listed and still clickable even while its layer is hidden — the
+    // point of the hierarchy is finding things you can't spot on the grid,
+    // and that's doubly true once they're invisible there. Just dimmed as a
+    // hint that it won't show up on the canvas right now.
+    const hiddenHint = hiddenLayers.has(layerVal) ? ' hrow-hidden' : '';
+    html.push(`<button type="button" class="hierarchy-row${active}${hiddenHint}" data-hid="${ent.id}">
+      <span class="hswatch" style="background:${(pal && pal.color) || '#555'};">${(pal && pal.icon) || ''}</span>
+      <span class="hlabel">${paletteLabel(ent.type)}</span>
+      <span class="hlayer">${hiddenLayers.has(layerVal) ? '🚫 ' : ''}${layerVal !== 0 ? `c.${layerVal} · ` : ''}(${ent.x},${ent.y})</span>
+    </button>`);
+  }
+  hierarchyEl.innerHTML = html.join('');
+  hierarchyEl.querySelectorAll('[data-hid]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      selectedId = btn.dataset.hid;
+      render(); renderProps();
+    });
+  });
+}
+
+// ------------------------------------------------------------ layers panel
+// Sits under the tool palette, on the editor's left side. One row per
+// distinct `layer` value actually used by placed entities (front-most
+// first, same order as the hierarchy panel), each with an eye toggle to
+// hide that layer from the canvas while editing a crowded level — purely a
+// view filter for this editing session: it's never saved with the level,
+// never touches the level data, and the hierarchy panel keeps listing
+// everything regardless (see renderHierarchy's hiddenHint).
+function renderLayersPanel() {
+  if (!layersPanelEl) return;
+  const counts = new Map();
+  for (const ent of level.entities) {
+    const l = clampLayer(ent.layer ?? 0);
+    counts.set(l, (counts.get(l) || 0) + 1);
+  }
+  // Drop any hidden-layer entry that no longer has entities on it (deleted,
+  // moved to another layer, etc.) so the panel never shows a stale toggle.
+  for (const l of [...hiddenLayers]) { if (!counts.has(l)) hiddenLayers.delete(l); }
+  const layers = [...counts.keys()].sort((a, b) => b - a);
+  const rows = layers.map((l) => {
+    const hidden = hiddenLayers.has(l);
+    const label = l === 0 ? 'Couche 0 (défaut)' : `Couche ${l > 0 ? '+' : ''}${l}`;
+    return `<button type="button" class="layer-row${hidden ? ' layer-hidden' : ''}" data-layer="${l}" title="${hidden ? 'Afficher' : 'Masquer'} cette couche dans l'éditeur">
+      <span class="layer-eye">${hidden ? '🚫' : '👁️'}</span>
+      <span class="llabel">${label}</span>
+      <span class="lcount">${counts.get(l)}</span>
+    </button>`;
+  }).join('');
+  layersPanelEl.innerHTML = `
+    <h3>👁️ Couches</h3>
+    ${layers.length ? `<div id="layers-list">${rows}</div>` : '<p class="muted empty" style="font-size:12px;margin:4px 0;">Aucun élément placé.</p>'}
+    ${hiddenLayers.size ? '<button type="button" class="btn small" id="layers-show-all" style="width:100%;margin-top:8px;">👁️ Tout afficher</button>' : ''}
+  `;
+  // Listener lives on the never-replaced panel element itself (bound once,
+  // see bindLayersPanel) rather than on these buttons: editing a numeric
+  // props field (e.g. "Couche") and then clicking a row here in one motion
+  // blurs that field first, which re-renders this panel synchronously and
+  // would swap the very button being clicked out from under a per-button
+  // listener, silently eating that first click.
 }
 
 // Draws a dashed "string" from the currently-selected trigger/button/plate to
 // every entity its actions target — only while it's selected, so the grid
 // doesn't get cluttered with every link in the level at once.
 function drawTriggerLinks() {
-  if (!selectedId || selectedId === 'playerstart') return;
+  if (!selectedId || selectedId === 'playerstart' || selectedId === 'playerstart2') return;
   const trig = findEntity(level, selectedId);
-  if (!trig || !hasActionListType(trig.type)) return;
+  if (!trig || !hasActionListType(trig.type) || isHiddenEntity(trig)) return;
   const actions = (trig.props && trig.props.actions) || [];
   if (!actions.length) return;
   ctx.save();
@@ -308,8 +704,14 @@ function drawTriggerLinks() {
       drawLink(fromX, fromY, ps.x * CELL + CELL / 2, ps.y * CELL + CELL / 2);
       continue;
     }
+    if (action.targetId === 'player2') {
+      if (!level.playerStart2) continue;
+      const ps2 = level.playerStart2;
+      drawLink(fromX, fromY, ps2.x * CELL + CELL / 2, ps2.y * CELL + CELL / 2);
+      continue;
+    }
     const target = findEntity(level, action.targetId);
-    if (!target) continue;
+    if (!target || isHiddenEntity(target)) continue;
     const tx = target.x * CELL + (target.w * CELL) / 2;
     const ty = target.y * CELL + (target.h * CELL) / 2;
     drawLink(fromX, fromY, tx, ty);
@@ -354,13 +756,6 @@ function drawEntity(ent) {
   if (ent.passable || ent.invisible) ctx.globalAlpha = 0.55;
   switch (ent.type) {
     case ENTITY_TYPES.BLOCK: ctx.fillStyle = '#111319'; ctx.fillRect(x, y, w, h); ctx.strokeStyle = '#3a3f52'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2); break;
-    case ENTITY_TYPES.PLATFORM:
-      if (ent.props && ent.props.style === 'block') {
-        ctx.fillStyle = '#111319'; ctx.fillRect(x, y, w, h); ctx.strokeStyle = '#3a3f52'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
-      } else {
-        ctx.fillStyle = (ent.props && ent.props.color) || '#2d6cdf'; ctx.fillRect(x, y, w, h);
-      }
-      break;
     case ENTITY_TYPES.CRATE:
       ctx.fillStyle = '#8a5a34'; ctx.fillRect(x, y, w, h);
       ctx.strokeStyle = '#5c3a1e'; ctx.lineWidth = 2; ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
@@ -448,18 +843,38 @@ function drawEntity(ent) {
       ctx.fillText(ent.props.loop ? 'T ∞' : 'T', x + w / 2, y + h / 2 + 3);
       break;
     case ENTITY_TYPES.BUTTON:
-      ctx.fillStyle = '#2b2d3d'; ctx.fillRect(x, y, w, h);
-      ctx.strokeStyle = '#5b5f7a'; ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
-      ctx.fillStyle = '#06d6a0'; ctx.fillRect(x + w * 0.18, y + h * 0.56, w * 0.64, h * 0.32);
-      if (ent.props.loop) { ctx.fillStyle = '#fff'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('∞', x + w / 2, y + h * 0.32); }
+      withFacingRotation(ent, x, y, w, h, () => {
+        ctx.fillStyle = '#2b2d3d'; ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = '#5b5f7a'; ctx.strokeRect(x + 2, y + 2, w - 4, h - 4);
+        ctx.fillStyle = '#06d6a0'; ctx.fillRect(x + w * 0.18, y + h * 0.56, w * 0.64, h * 0.32);
+        if (ent.props.loop) { ctx.fillStyle = '#fff'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('∞', x + w / 2, y + h * 0.32); }
+      });
       break;
     case ENTITY_TYPES.PLATE:
-      ctx.fillStyle = '#5c3d13'; ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = '#c98a2b'; ctx.fillRect(x + 3, y + h * 0.55, w - 6, h * 0.35);
-      ctx.strokeStyle = '#7a531a'; ctx.strokeRect(x + 3, y + h * 0.55, w - 6, h * 0.35);
-      if (ent.props.loop) { ctx.fillStyle = '#fff'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('∞', x + w / 2, y + h * 0.32); }
+      withFacingRotation(ent, x, y, w, h, () => {
+        ctx.fillStyle = '#5c3d13'; ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = '#c98a2b'; ctx.fillRect(x + 3, y + h * 0.55, w - 6, h * 0.35);
+        ctx.strokeStyle = '#7a531a'; ctx.strokeRect(x + 3, y + h * 0.55, w - 6, h * 0.35);
+        if (ent.props.loop) { ctx.fillStyle = '#fff'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('∞', x + w / 2, y + h * 0.32); }
+      });
       break;
   }
+  ctx.restore();
+}
+
+// Purely cosmetic facing rotation for the editor-canvas preview, mirroring
+// engine.js's _facingAngle exactly (same angle map, same 'up' = identity
+// default) so the editor and the actual game always look the same.
+function facingAngle(facing) {
+  return { up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[facing] || 0;
+}
+function withFacingRotation(ent, x, y, w, h, draw) {
+  const angle = facingAngle(ent.props && ent.props.facing);
+  if (!angle) { draw(); return; }
+  const cx = x + w / 2, cy = y + h / 2;
+  ctx.save();
+  ctx.translate(cx, cy); ctx.rotate(angle); ctx.translate(-cx, -cy);
+  draw();
   ctx.restore();
 }
 
@@ -477,9 +892,12 @@ function bindCanvas() {
 }
 
 function entityAt(cx, cy) {
-  // topmost (last placed) entity whose box contains the cell
+  // topmost (last placed) entity whose box contains the cell — entities on a
+  // hidden layer are skipped, exactly as if they weren't there: you can't
+  // click, drag, erase, or target-pick something you can't currently see.
   for (let i = level.entities.length - 1; i >= 0; i--) {
     const e = level.entities[i];
+    if (isHiddenEntity(e)) continue;
     if (cx >= e.x && cx < e.x + e.w && cy >= e.y && cy < e.y + e.h) return e;
   }
   return null;
@@ -490,7 +908,10 @@ function handleCellClick(cx, cy) {
     // View-only: clicking only ever selects (to inspect props), never
     // moves/places/erases anything.
     const clicked = entityAt(cx, cy);
-    selectedId = clicked ? clicked.id : (cx === level.playerStart.x && cy === level.playerStart.y ? 'playerstart' : null);
+    const ps2 = level.playerStart2;
+    selectedId = clicked ? clicked.id
+      : (cx === level.playerStart.x && cy === level.playerStart.y ? 'playerstart'
+      : (ps2 && cx === ps2.x && cy === ps2.y ? 'playerstart2' : null));
     render(); renderProps();
     return;
   }
@@ -518,6 +939,22 @@ function handleCellClick(cx, cy) {
     render(); renderProps();
     return;
   }
+  if (tool === 'playerstart2') {
+    // First click while there's no player 2 yet creates one ("activate" the
+    // feature); once it exists, this tool just relocates it — same
+    // create-or-move split the palette button's own label already implies
+    // ("Départ joueur 2" vs "Départ joueur 2 (activer)").
+    if (level.playerStart2) {
+      level.playerStart2.x = cx; level.playerStart2.y = cy;
+    } else {
+      level.playerStart2 = { x: cx, y: cy, gravityDir: 'down', invisible: false };
+    }
+    selectedId = 'playerstart2';
+    tool = 'select';
+    buildPalette();
+    render(); renderProps();
+    return;
+  }
   if (tool === 'erase') {
     const ent = entityAt(cx, cy);
     if (ent) { removeEntity(level, ent.id); if (selectedId === ent.id) selectedId = null; }
@@ -531,14 +968,18 @@ function handleCellClick(cx, cy) {
         selectedId = clicked.id; // switch selection instead
       } else if (selectedId === 'playerstart') {
         level.playerStart.x = cx; level.playerStart.y = cy;
+      } else if (selectedId === 'playerstart2') {
+        if (level.playerStart2) { level.playerStart2.x = cx; level.playerStart2.y = cy; }
       } else {
         const ent = findEntity(level, selectedId);
         if (ent) { ent.x = cx; ent.y = cy; }
       }
     } else {
       const clicked = entityAt(cx, cy);
+      const ps2 = level.playerStart2;
       if (clicked) selectedId = clicked.id;
       else if (cx === level.playerStart.x && cy === level.playerStart.y) selectedId = 'playerstart';
+      else if (ps2 && cx === ps2.x && cy === ps2.y) selectedId = 'playerstart2';
     }
     render(); renderProps();
     return;
@@ -584,7 +1025,12 @@ function renderProps() {
     propsEl.innerHTML = '<h3 style="margin-top:0;">Propriétés</h3><p class="muted">Sélectionne un élément sur la grille (outil « Sélection ») pour l\'éditer.</p>';
     return;
   }
-  if (selectedId === 'playerstart') { renderPlayerStartProps(); return; }
+  if (selectedId === 'playerstart') { renderPlayerStartProps(1); return; }
+  if (selectedId === 'playerstart2') {
+    if (!level.playerStart2) { selectedId = null; return renderProps(); }
+    renderPlayerStartProps(2);
+    return;
+  }
   const ent = findEntity(level, selectedId);
   if (!ent) { selectedId = null; return renderProps(); }
 
@@ -597,10 +1043,11 @@ function renderProps() {
       <input type="number" id="p-y" value="${ent.y}" min="0" max="${level.rows - 1}" />
     </div>`);
 
-  // Solid blocks are placed one cell at a time and never resized (they
-  // assemble seamlessly instead), and a checkpoint's flag is always drawn at
-  // the same fixed size — so the size fields simply don't apply to either.
-  if (ent.type !== ENTITY_TYPES.BLOCK && ent.type !== ENTITY_TYPES.CHECKPOINT) {
+  // A checkpoint's flag is always drawn at the same fixed size, so the size
+  // fields don't apply to it — every other type (BLOCK included: solid
+  // blocks are placed one cell at a time, but resizable afterward here,
+  // just like a crate) gets them.
+  if (ent.type !== ENTITY_TYPES.CHECKPOINT) {
     html.push(`<label>Taille (largeur / hauteur en cases)</label>
       <div class="row">
         <input type="number" id="p-w" value="${ent.w}" min="1" max="${level.cols}" />
@@ -608,17 +1055,11 @@ function renderProps() {
       </div>`);
   }
 
-  // Built from LAYERS (already back-to-front ordered) rather than via
-  // selectHtml()'s generic Object.entries(): plain-object keys that look
-  // like non-negative integers ("0","1","2") get silently hoisted before
-  // string keys ("-2","-1") by JS's own property ordering rules, which would
-  // scramble the dropdown into a confusing 0,1,2,-2,-1 order.
   const layerCurrent = clampLayer(ent.layer ?? 0);
-  const layerOptions = LAYERS.map((v) => `<option value="${v}" ${v === layerCurrent ? 'selected' : ''}>${LAYER_LABELS[String(v)]}</option>`).join('');
   html.push(fieldGroup('Affichage', `
     <label>Couche (superposition visuelle)</label>
-    <select id="p-layer">${layerOptions}</select>
-    <p class="hint">Change seulement l'ordre d'affichage (devant/derrière le joueur ou d'autres éléments) : quelle que soit la couche, cet élément continue d'interagir normalement avec le joueur (collisions, dangers, actions...).</p>`));
+    <input type="number" id="p-layer" value="${layerCurrent}" min="${LAYER_MIN}" max="${LAYER_MAX}" step="1" />
+    <p class="hint">0 = normal (par défaut). Négatif = plus en arrière-plan, positif = plus au premier plan — devant ou derrière le joueur selon le signe. Change seulement l'ordre d'affichage : quelle que soit la couche, cet élément continue d'interagir normalement avec le joueur (collisions, dangers, actions...). Utilise le panneau « Hiérarchie » pour voir et sélectionner les éléments par couche.</p>`));
 
   const toggles = togglesForType(ent.type);
   if (toggles.length) {
@@ -626,9 +1067,10 @@ function renderProps() {
     html.push(fieldGroup('État', `<div class="toggle-list">${rows}</div>`));
   }
 
-  if (ent.type === ENTITY_TYPES.SPIKE) {
+  if (ent.type === ENTITY_TYPES.SPIKE || ent.type === ENTITY_TYPES.BUTTON || ent.type === ENTITY_TYPES.PLATE) {
     html.push(fieldGroup('Orientation', `
-      ${selectHtml('p-facing', FACING_LABELS, ent.props.facing || 'up')}`));
+      ${selectHtml('p-facing', FACING_LABELS, ent.props.facing || 'up')}
+      ${ent.type !== ENTITY_TYPES.SPIKE ? '<p class="hint">Purement visuel (comme pour la pointe) : ça ne change pas où il faut marcher/appuyer pour l\'activer.</p>' : ''}`));
   }
   if (ent.type === ENTITY_TYPES.SPRING) {
     html.push(fieldGroup('Ressort', `
@@ -651,21 +1093,18 @@ function renderProps() {
   if (ent.type === ENTITY_TYPES.SPINNER) {
     html.push(fieldGroup('Rotation', `
       <label>Vitesse de rotation</label>
-      <input type="number" id="p-speed" value="${ent.props.speed ?? 2}" step="0.1" min="0.1" max="10" />`));
+      <input type="number" id="p-speed" value="${ent.props.speed ?? 2}" step="0.1" min="0.1" max="10" />
+      <label>Sens de rotation</label>
+      ${selectHtml('p-spin-direction', { cw: 'Horaire', ccw: 'Antihoraire' }, ent.props.direction || 'cw')}`));
   }
-  if (ent.type === ENTITY_TYPES.PLATFORM) {
-    const style = ent.props.style === 'block' ? 'block' : 'color';
-    const colorRow = style === 'color' ? `
-      <label>Couleur</label>
-      <div class="row" style="align-items:center;gap:8px;">
-        <input type="color" id="p-color" value="${ent.props.color || '#2d6cdf'}" style="width:52px;height:32px;padding:2px;flex:none;" />
-        <button class="btn small" id="p-color-reset" type="button">Couleur par défaut</button>
-      </div>` : `
-      <p class="hint" style="margin-top:0;">La plateforme est rendue exactement comme un bloc solide (même couleur, même style) — pratique pour la camoufler parmi de vrais blocs.</p>`;
-    html.push(fieldGroup('Apparence', `
-      <label>Style</label>
-      ${selectHtml('p-platform-style', { color: 'Couleur personnalisée', block: 'Bloc solide' }, style)}
-      ${colorRow}`));
+  if (ent.type === ENTITY_TYPES.CRATE) {
+    html.push(fieldGroup('Cube poussable', `
+      <label>Gravité (x normal, négatif = flotte vers le haut)</label>
+      <input type="number" id="p-crate-gravity" value="${ent.props.gravity ?? 1}" step="0.1" min="-5" max="5" />
+      <p class="hint">Se combine avec la gravité du monde (« Condition du monde ») : si les deux sont négatives (ou les deux positives), le cube tombe normalement ; si un seul des deux l'est, il flotte vers le haut. 0 = insensible à la gravité.</p>
+      <label>Difficulté à pousser</label>
+      <input type="number" id="p-crate-pushdiff" value="${ent.props.pushDifficulty ?? 1}" step="0.1" min="0.1" max="10" />
+      <p class="hint">1 = normal (suit le joueur sans résistance). Plus haut = plus lourd, il traîne derrière le joueur qui le pousse.</p>`));
   }
   if (ent.type === ENTITY_TYPES.TELEPORTER) {
     const freqLabels = {};
@@ -694,10 +1133,11 @@ function renderProps() {
   }
 }
 
-function renderPlayerStartProps() {
-  const ps = level.playerStart;
+function renderPlayerStartProps(player = 1) {
+  const isP2 = player === 2;
+  const ps = isP2 ? level.playerStart2 : level.playerStart;
   const html = [];
-  html.push('<div class="props-header"><h3>Propriétés</h3><div class="pill type-badge">🧍 Départ joueur</div></div>');
+  html.push(`<div class="props-header"><h3>Propriétés</h3><div class="pill type-badge">🧍 Départ joueur${isP2 ? ' 2' : (level.playerStart2 ? ' 1' : '')}</div></div>`);
   html.push('<div class="props-panel">');
   html.push(`<label>Position (colonne / ligne)</label>
     <div class="row">
@@ -709,6 +1149,11 @@ function renderPlayerStartProps() {
     ${selectHtml('p-ps-gravity', GRAVITY_LABELS, ps.gravityDir || 'down')}
     <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-ps-invisible" ${ps.invisible ? 'checked' : ''} />Joueur invisible au départ</label>
     <p class="hint">Même invisible, le joueur reste bien présent : le son et les particules (saut, atterrissage, mort…) continuent de fonctionner normalement.</p>`));
+  if (isP2) {
+    html.push(fieldGroup('2 joueurs', `
+      <p class="hint">Retire le joueur 2 : le niveau redevient un niveau à 1 joueur (les actions qui le ciblaient viseront à nouveau le joueur 1).</p>
+      <button type="button" class="btn small danger" id="p-ps2-delete">🗑️ Supprimer le joueur 2</button>`));
+  }
   html.push('</div>');
   propsEl.innerHTML = html.join('');
 
@@ -719,6 +1164,18 @@ function renderPlayerStartProps() {
   if (gravSel) gravSel.addEventListener('change', () => { ps.gravityDir = gravSel.value; });
   const invChk = document.getElementById('p-ps-invisible');
   if (invChk) invChk.addEventListener('change', () => { ps.invisible = invChk.checked; render(); });
+  const delBtn = document.getElementById('p-ps2-delete');
+  if (delBtn) delBtn.addEventListener('click', () => {
+    // Any action that was targeting 'player2' loses its target rather than
+    // silently repointing at player 1 — matches how deleting a normal
+    // entity leaves dangling targets untouched (author has to notice and
+    // re-pick), instead of surprising them with a target swap.
+    level.playerStart2 = null;
+    selectedId = null;
+    tool = 'select';
+    buildPalette();
+    render(); renderProps();
+  });
   if (previewMode) propsEl.querySelectorAll('input, select, button, textarea').forEach((el) => { el.disabled = true; });
 }
 
@@ -745,8 +1202,7 @@ function bindPropsInputs(ent) {
     el.addEventListener('change', () => { ent[el.dataset.toggle] = el.checked; render(); });
   });
 
-  const layerSel = document.getElementById('p-layer');
-  if (layerSel) layerSel.addEventListener('change', () => { ent.layer = clampLayer(layerSel.value); render(); });
+  num('p-layer', (v) => { ent.layer = clampLayer(v); render(); });
 
   const facingSel = document.getElementById('p-facing');
   if (facingSel) facingSel.addEventListener('change', () => { ent.props.facing = facingSel.value; render(); });
@@ -760,13 +1216,10 @@ function bindPropsInputs(ent) {
   const falloffChk = document.getElementById('p-falloff');
   if (falloffChk) falloffChk.addEventListener('change', () => { ent.props.falloff = falloffChk.checked; });
   num('p-speed', (v) => { ent.props.speed = v; });
-
-  const colorInput = document.getElementById('p-color');
-  if (colorInput) colorInput.addEventListener('input', () => { ent.props.color = colorInput.value; render(); });
-  const colorResetBtn = document.getElementById('p-color-reset');
-  if (colorResetBtn) colorResetBtn.addEventListener('click', () => { ent.props.color = null; render(); renderProps(); });
-  const platformStyleSel = document.getElementById('p-platform-style');
-  if (platformStyleSel) platformStyleSel.addEventListener('change', () => { ent.props.style = platformStyleSel.value; render(); renderProps(); });
+  const spinDirSel = document.getElementById('p-spin-direction');
+  if (spinDirSel) spinDirSel.addEventListener('change', () => { ent.props.direction = spinDirSel.value; });
+  num('p-crate-gravity', (v) => { ent.props.gravity = Number.isFinite(v) ? Math.max(-5, Math.min(5, v)) : 1; });
+  num('p-crate-pushdiff', (v) => { ent.props.pushDifficulty = Number.isFinite(v) ? Math.max(0.1, Math.min(10, v)) : 1; });
 
   const freqSel = document.getElementById('p-freq');
   if (freqSel) freqSel.addEventListener('change', () => {
@@ -798,17 +1251,30 @@ function bindPropsInputs(ent) {
   const delBtn = document.getElementById('delete-ent');
   if (delBtn) delBtn.addEventListener('click', () => { removeEntity(level, ent.id); selectedId = null; render(); renderProps(); });
 
-  // trigger/button/plate-specific bindings
-  const loopChk = document.getElementById('p-loop');
-  if (loopChk) loopChk.addEventListener('change', () => { ent.props.loop = loopChk.checked; render(); renderProps(); });
+  // trigger/button/plate-specific bindings — "Boucle infinie" now lives in
+  // the Actions panel (see bindActionsPanel's #ap-loop), alongside the
+  // actions it governs.
   const reversibleChk = document.getElementById('p-reversible');
   if (reversibleChk) reversibleChk.addEventListener('change', () => { ent.props.reversible = reversibleChk.checked; render(); renderProps(); });
-  const addActionBtn = document.getElementById('add-action');
-  if (addActionBtn) addActionBtn.addEventListener('click', () => {
-    ent.props.actions.push(createAction(ACTION_TYPES.MOVE_ELEMENT, { params: defaultParamsFor(ACTION_TYPES.MOVE_ELEMENT) }));
-    renderProps();
-  });
-  ent.props.actions && ent.props.actions.forEach((action) => bindActionRow(ent, action));
+
+  // "Activation avancée" — see renderAdvancedActivation and engine.js's
+  // _activate/_canActivate/_graceOverlap/_fireTrigger.
+  const releaseModeSel = document.getElementById('p-releasemode');
+  if (releaseModeSel) releaseModeSel.addEventListener('change', () => { ent.props.releaseMode = releaseModeSel.value; });
+  const activatorSel = document.getElementById('p-activator');
+  if (activatorSel) activatorSel.addEventListener('change', () => { ent.props.activator = activatorSel.value; });
+  num('p-activationdelay', (v) => { ent.props.activationDelay = Math.max(0, v || 0); });
+  num('p-releasegrace', (v) => { ent.props.releaseGrace = Math.max(0, v || 0); });
+  const sequentialChk = document.getElementById('p-sequential');
+  if (sequentialChk) sequentialChk.addEventListener('change', () => { ent.props.sequential = sequentialChk.checked; });
+  num('p-maxrepeats', (v) => { ent.props.maxRepeats = Math.max(0, Math.round(v || 0)); });
+  num('p-rearmcooldown', (v) => { ent.props.rearmCooldown = Math.max(0, v || 0); });
+
+  // Actions themselves (add/reorder/edit) live in the "🧩 Actions" panel
+  // below the canvas now, not here — see renderActionsPanel/bindActionsPanel.
+  // This button just jumps you there for the currently-selected entity.
+  const openActionsBtn = document.getElementById('open-actions-panel');
+  if (openActionsBtn) openActionsBtn.addEventListener('click', () => switchBottomTab('actions'));
 }
 
 function clampInt(v, min, max) { return Math.max(min, Math.min(max, Math.round(v))); }
@@ -819,21 +1285,150 @@ function renderLoopCheckbox(ent) {
 }
 
 // Shared shape for TRIGGER/BUTTON/PLATE: a titled card explaining how it
-// fires, an optional extra toggle (e.g. "reversible" for button/plate), the
-// loop checkbox, then its list of actions with an "add" button.
+// fires, an optional extra toggle (e.g. "reversible" for button/plate), and
+// a pointer over to the "🧩 Actions" panel below the canvas — that's now the
+// only place its action list (add/reorder/edit, "boucle infinie" included)
+// actually lives, so there's a full-width Scratch-like space to assemble it
+// in instead of the narrow props column. See renderActionsPanel.
 function renderActionListEditor(title, hintHtml, actionsLabel, ent, extraHtml = '') {
+  const count = (ent.props.actions || []).length;
   const body = `
     <p class="hint" style="margin-top:0;">${hintHtml}</p>
     ${extraHtml}
-    ${renderLoopCheckbox(ent)}
-    <label style="margin-top:14px;">${actionsLabel}</label>
-    <div id="actions-list">${(ent.props.actions || []).map((a) => renderActionRow(ent, a)).join('')}</div>
-    <button class="btn small" id="add-action" style="width:100%;margin-top:6px;">+ Ajouter une action</button>`;
+    <div class="row" style="align-items:center;margin-top:14px;">
+      <label style="margin:0;flex:1;">${actionsLabel}</label>
+      <span class="pill">${count} action${count === 1 ? '' : 's'}</span>
+    </div>
+    <button type="button" class="btn small primary" id="open-actions-panel" style="width:100%;margin-top:8px;">🧩 Assembler les actions</button>`;
   return fieldGroup(title, body);
 }
 
+// Emoji/accent color/title for each action type's "bloc" card (see
+// renderActionBlock) — purely cosmetic, no bearing on behavior.
+const ACTION_BLOCK_META = {
+  [ACTION_TYPES.MOVE_ELEMENT]: { emoji: '🧭', color: '#3a86ff' },
+  [ACTION_TYPES.TELEPORT]: { emoji: '🌀', color: '#8338ec' },
+  [ACTION_TYPES.SET_STATE]: { emoji: '⚙️', color: '#ffb703' },
+  [ACTION_TYPES.SET_WORLD_STATE]: { emoji: '🌍', color: '#06d6a0' },
+  [ACTION_TYPES.SET_PLAYER_STATE]: { emoji: '🧍', color: '#ef476f' },
+};
+
+// The "Accéder aux blocs" rendering of one action: the exact same data
+// (target, params, delay) as renderActionRow, but laid out as a natural-
+// language sentence with small inline editable pieces instead of a stacked
+// form — closer to "Déplacé [cible] de [] à droite", "Téléporté [cible] à la
+// case [x,y]", etc. Reuses the identical data-f/data-pick-target/data-ws-*
+// attributes as renderActionRow, so bindActionRow needs no changes at all to
+// bind either view.
+function renderActionBlock(action) {
+  const p = action.params || {};
+  const meta = ACTION_BLOCK_META[action.type] || { emoji: '🧩', color: null };
+  const needsTarget = NEEDS_TARGET.has(action.type);
+  const allowPlayer = ALLOWS_PLAYER_TARGET.has(action.type);
+  // One single clickable chip picks the target — it used to be a plain
+  // (non-clickable) label next to a separate "Choisir sur la grille" button,
+  // which looked like two controls for the same job. Now there's just one:
+  // click the chip itself, whether picking for the first time or changing
+  // an already-set target.
+  const targetLabel = targetLabelFor(action.targetId) || 'clique pour choisir sur la grille';
+  const targetChip = needsTarget ? `
+    <button type="button" class="btn small block-chip" data-pick-target="${action.id}">🎯 ${targetLabel}</button>
+    ${playerTargetButtons(action, allowPlayer)}` : '';
+
+  let body = '';
+  switch (action.type) {
+    case ACTION_TYPES.MOVE_ELEMENT:
+      body = `
+        <div class="block-sentence">
+          <span>Déplacer</span> ${targetChip} <span>de</span>
+          <input type="number" class="block-input" data-f="axisX" value="${p.axisX ?? 0}" title="+ = droite, − = gauche" />
+          <span>case(s) — <strong>+</strong> droite / <strong>−</strong> gauche</span>
+        </div>
+        <div class="block-sentence">
+          <span>et de</span>
+          <input type="number" class="block-input" data-f="axisY" value="${p.axisY ?? 0}" title="+ = monte, − = descend" />
+          <span>case(s) — <strong>+</strong> haut / <strong>−</strong> bas, en</span>
+          <input type="number" class="block-input" step="0.1" data-f="duration" value="${p.duration ?? 0.5}" />
+          <span>s</span>
+        </div>`;
+      break;
+    case ACTION_TYPES.TELEPORT:
+      body = `
+        <div class="block-sentence">
+          <span>Téléporter</span> ${targetChip} <span>à la case</span>
+          <input type="number" class="block-input teleport-coord-input" data-f="x" value="${p.x ?? 0}" />
+          <input type="number" class="block-input teleport-coord-input" data-f="y" value="${p.y ?? 0}" />
+        </div>
+        <p class="hint">Astuce : clique dans un des deux champs ci-dessus pour afficher les coordonnées (x,y) de chaque case sur la grille.</p>`;
+      break;
+    case ACTION_TYPES.SET_STATE:
+      body = `
+        <div class="block-sentence"><span>Changer l'état de</span> ${targetChip} <span>en :</span></div>
+        <div class="toggle-list" style="margin-top:6px;">
+          ${ENTITY_TOGGLES.map(t => `<label class="toggle-row"><input type="checkbox" data-f="${t}" ${p[t] ? 'checked' : ''} />${TOGGLE_LABELS[t]}</label>`).join('')}
+        </div>
+        ${optionalBlock('facing', 'Rotation (ex. pointes)',
+          selectHtml('', FACING_LABELS, p.facing || 'up').replace('id=""', 'data-ws-value="facing"'),
+          'facing' in p)}`;
+      break;
+    case ACTION_TYPES.SET_WORLD_STATE:
+      body = `<div class="block-sentence"><span>Changer l'état du monde :</span></div>${renderWorldStateFields(p)}`;
+      break;
+    case ACTION_TYPES.SET_PLAYER_STATE:
+      body = `<div class="block-sentence"><span>Changer l'état du joueur :</span></div>${renderPlayerStateFields(p)}`;
+      break;
+  }
+
+  return `
+    <div class="action-item action-block" data-action="${action.id}" style="${meta.color ? `--block-color:${meta.color};` : ''}">
+      <div class="block-head">
+        <span class="block-drag-handle" title="Glisser pour réordonner">⠿</span>
+        <span class="block-emoji">${meta.emoji}</span>
+        ${selectHtml('', ACTION_LABELS, action.type).replace('id=""', 'data-f="type"')}
+        <span class="block-spacer"></span>
+        <label class="block-delay">Délai <input type="number" class="block-input small" step="0.1" data-f="delay" value="${action.delay || 0}" /> s</label>
+        <button type="button" class="btn small danger" data-remove-action="${action.id}">✕</button>
+      </div>
+      <div class="block-body">${body}</div>
+    </div>`;
+}
+
 function renderTriggerEditor(ent) {
-  return renderActionListEditor('Trigger', 'Se déclenche dès que le joueur entre dans la zone.', 'Actions déclenchées', ent);
+  return renderActionListEditor('Trigger', 'Se déclenche dès que le joueur entre dans la zone.', 'Actions déclenchées', ent) + renderAdvancedActivation(ent);
+}
+
+// Shared "advanced activation" card for TRIGGER/BUTTON/PLATE — see
+// engine.js's _activate/_canActivate/_graceOverlap/_fireTrigger for how each
+// of these actually plays out at runtime. A plate can be activated by a
+// resting crate as well as the player (it always could); trigger/button stay
+// player-only unless explicitly opened up to crates here.
+function renderAdvancedActivation(ent) {
+  const props = ent.props;
+  return fieldGroup('Activation avancée', `
+    <label>Comportement au relâchement</label>
+    ${selectHtml('p-releasemode', RELEASE_MODE_LABELS, props.releaseMode || 'finish')}
+    <p class="hint">Les actions déjà lancées vont de toute façon jusqu'au bout, que le joueur reste dessus ou non — « fermer » rend en plus l'élément définitivement inutilisable une fois cette activation terminée.</p>
+
+    <label style="margin-top:10px;">Qui peut l'activer</label>
+    ${selectHtml('p-activator', ACTIVATOR_LABELS, props.activator || 'player')}
+
+    <label style="margin-top:10px;">Délai d'activation (secondes)</label>
+    <input type="number" id="p-activationdelay" value="${props.activationDelay || 0}" min="0" step="0.1" />
+    <p class="hint">Temps d'attente entre l'entrée dans la zone et le moment où les actions démarrent vraiment.</p>
+
+    <label style="margin-top:10px;">Délai de grâce au relâchement (secondes)</label>
+    <input type="number" id="p-releasegrace" value="${props.releaseGrace || 0}" min="0" step="0.1" />
+    <p class="hint">Un relâchement plus court que ce délai est ignoré — pratique contre les à-coups au bord d'une zone.</p>
+
+    <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-sequential" ${props.sequential ? 'checked' : ''} />Exécuter les actions dans l'ordre (l'une après l'autre, pas toutes en même temps)</label>
+
+    <label style="margin-top:10px;">Nombre max de répétitions</label>
+    <input type="number" id="p-maxrepeats" value="${props.maxRepeats || 0}" min="0" step="1" />
+    <p class="hint">0 = illimité. Une fois ce nombre atteint, l'élément se ferme définitivement.</p>
+
+    <label style="margin-top:10px;">Délai de réarmement (secondes)</label>
+    <input type="number" id="p-rearmcooldown" value="${props.rearmCooldown || 0}" min="0" step="0.1" />
+    <p class="hint">0 = aucun. Temps d'attente supplémentaire, une fois les actions terminées, avant de pouvoir se réactiver.</p>`);
 }
 
 // Both button and plate can optionally alternate forward/reverse on
@@ -847,14 +1442,14 @@ function renderButtonEditor(ent) {
   const hint = ent.props.reversible
     ? 'À chaque pression, le bouton alterne : il joue les actions, puis au clic suivant il les rejoue à l\'envers (retour à l\'état initial), et ainsi de suite. Sans effet si « Boucle infinie » est cochée.'
     : 'À chaque pression, le bouton rejoue ses actions depuis le début (toujours dans le même sens). Active « Inversement des actions » ci-dessous pour qu\'il alterne aller/retour à chaque pression.';
-  return renderActionListEditor('Bouton', hint, 'Actions déclenchées à chaque pression', ent, renderReversibleCheckbox(ent));
+  return renderActionListEditor('Bouton', hint, 'Actions déclenchées à chaque pression', ent, renderReversibleCheckbox(ent)) + renderAdvancedActivation(ent);
 }
 
 function renderPlateEditor(ent) {
   const hint = ent.props.reversible
     ? 'Tant que le joueur reste dessus, les actions se répètent automatiquement en alternant aller/retour à chaque cycle (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus.'
     : 'Tant que le joueur reste dessus, les actions se répètent automatiquement dans le même sens (elles s\'arrêtent dès qu\'il descend) — sauf si « Boucle infinie » est cochée, auquel cas un seul passage suffit à lancer une répétition qui ne s\'arrête plus. Active « Inversement des actions » ci-dessous pour alterner aller/retour à chaque cycle.';
-  return renderActionListEditor('Plaque de pression', hint, 'Actions déclenchées', ent, renderReversibleCheckbox(ent));
+  return renderActionListEditor('Plaque de pression', hint, 'Actions déclenchées', ent, renderReversibleCheckbox(ent)) + renderAdvancedActivation(ent);
 }
 
 function defaultParamsFor(type) {
@@ -879,8 +1474,8 @@ function optionalBlock(key, label, innerHtml, enabled) {
 
 function renderWorldStateFields(p) {
   const parts = [];
-  parts.push(optionalBlock('gravityScale', 'Gravité du monde (x normal)',
-    `<input type="number" step="0.1" min="0.1" max="5" data-ws-value="gravityScale" value="${p.gravityScale ?? 1}" />`,
+  parts.push(optionalBlock('gravityScale', 'Gravité du monde (x normal, négatif = inversée)',
+    `<input type="number" step="0.1" min="-5" max="5" data-ws-value="gravityScale" value="${p.gravityScale ?? 1}" />`,
     'gravityScale' in p));
   parts.push(optionalBlock('background', "Fond d'écran",
     `<input type="color" data-ws-value="background" value="${p.background || '#1b1e2b'}" />`,
@@ -890,6 +1485,15 @@ function renderWorldStateFields(p) {
 
 function renderPlayerStateFields(p) {
   const parts = [];
+  // Only shown once the level actually has a second player (playerStart2) —
+  // on a single-player level this action always targets the one player that
+  // exists, no selector needed. Not wrapped in optionalBlock: it's a plain
+  // always-visible field, not an opt-in one (see engine.js's
+  // _resolveStatePlayer, which defaults to player 1 when this is absent).
+  if (level.playerStart2) {
+    parts.push(`<label>Quel joueur ?</label>
+      ${selectHtml('', { 1: 'Joueur 1', 2: 'Joueur 2' }, String(p.player || 1)).replace('id=""', 'data-ws-value="player"')}`);
+  }
   parts.push(optionalBlock('gravity', 'Gravité du joueur',
     selectHtml('', GRAVITY_LABELS, p.gravity || 'down').replace('id=""', 'data-ws-value="gravity"'),
     'gravity' in p));
@@ -932,6 +1536,7 @@ function setActionParamFromInput(action, el) {
   let val;
   if (el.type === 'checkbox') val = el.checked;
   else if (el.type === 'number') val = parseFloat(el.value);
+  else if (field === 'player') val = parseInt(el.value, 10); // "Quel joueur ?" select: 1 or 2, not a string
   else val = el.value;
   action.params[field] = val;
   render();
@@ -1001,7 +1606,7 @@ function renderActionRow(ent, action) {
   }
   const needsTarget = NEEDS_TARGET.has(action.type);
   const allowPlayer = ALLOWS_PLAYER_TARGET.has(action.type);
-  const target = action.targetId === 'player' ? 'Joueur' : (action.targetId ? shortId(action.targetId) : '— aucune —');
+  const target = targetLabelFor(action.targetId) || '— aucune —';
   return `
     <div class="action-item" data-action="${action.id}">
       <div class="head">
@@ -1012,7 +1617,7 @@ function renderActionRow(ent, action) {
       <div class="row" style="align-items:center;">
         <span class="pill" data-target-label>${target}</span>
         <button class="btn small" data-pick-target="${action.id}">Choisir sur la grille</button>
-        ${allowPlayer ? `<button class="btn small" data-pick-player="${action.id}">= Joueur</button>` : ''}
+        ${playerTargetButtons(action, allowPlayer)}
       </div>` : ''}
       <label>Délai après déclenchement (s)</label>
       <input type="number" step="0.1" data-f="delay" value="${action.delay || 0}" />
@@ -1022,8 +1627,23 @@ function renderActionRow(ent, action) {
 
 function shortId(id) { return id ? id.split('_').slice(-2).join('_') : ''; }
 
-function bindActionRow(ent, action) {
-  const row = propsEl.querySelector(`.action-item[data-action="${action.id}"]`);
+// Shared by renderActionRow and renderActionBlock: an action's target can be
+// a normal entity, the special 'player' id (always player 1), or — once the
+// level has a second player (playerStart2) — 'player2'.
+function targetLabelFor(targetId) {
+  if (targetId === 'player') return level.playerStart2 ? 'Joueur 1' : 'Joueur';
+  if (targetId === 'player2') return 'Joueur 2';
+  return targetId ? shortId(targetId) : null;
+}
+function playerTargetButtons(action, allowPlayer) {
+  if (!allowPlayer) return '';
+  let html = `<button type="button" class="btn small" data-pick-player="${action.id}">= Joueur${level.playerStart2 ? ' 1' : ''}</button>`;
+  if (level.playerStart2) html += `<button type="button" class="btn small" data-pick-player2="${action.id}">= Joueur 2</button>`;
+  return html;
+}
+
+function bindActionRow(ent, action, container = propsEl) {
+  const row = container.querySelector(`.action-item[data-action="${action.id}"]`);
   if (!row) return;
   row.querySelectorAll('[data-f]').forEach((el) => {
     const field = el.dataset.f;
@@ -1033,7 +1653,7 @@ function bindActionRow(ent, action) {
       if (field === 'type') {
         action.type = val; action.targetId = null;
         action.params = defaultParamsFor(val);
-        renderProps(); render();
+        render();
         return;
       }
       if (field === 'delay') { action.delay = val; return; }
@@ -1050,15 +1670,17 @@ function bindActionRow(ent, action) {
   const removeBtn = row.querySelector('[data-remove-action]');
   if (removeBtn) removeBtn.addEventListener('click', () => {
     ent.props.actions = ent.props.actions.filter((a) => a.id !== action.id);
-    renderProps(); render();
+    render();
   });
   const pickBtn = row.querySelector('[data-pick-target]');
   if (pickBtn) pickBtn.addEventListener('click', () => {
-    pickingTargetFor = { onPick: (id) => { action.targetId = id; renderProps(); render(); } };
+    pickingTargetFor = { onPick: (id) => { action.targetId = id; render(); } };
     pickBanner.classList.remove('hidden');
   });
   const pickPlayerBtn = row.querySelector('[data-pick-player]');
-  if (pickPlayerBtn) pickPlayerBtn.addEventListener('click', () => { action.targetId = 'player'; renderProps(); render(); });
+  if (pickPlayerBtn) pickPlayerBtn.addEventListener('click', () => { action.targetId = 'player'; render(); });
+  const pickPlayer2Btn = row.querySelector('[data-pick-player2]');
+  if (pickPlayer2Btn) pickPlayer2Btn.addEventListener('click', () => { action.targetId = 'player2'; render(); });
 }
 
 // ---------------------------------------------------------------- toolbar
@@ -1078,7 +1700,9 @@ function bindToolbar() {
   });
   if (worldGravityInput) worldGravityInput.addEventListener('change', () => {
     const v = parseFloat(worldGravityInput.value);
-    level.gravityScale = Number.isFinite(v) && v > 0 ? v : 1;
+    // Negative is intentional (inverts fall direction — see engine.js's
+    // _effectiveGravityDir) — only reject NaN, not sign.
+    level.gravityScale = Number.isFinite(v) ? Math.max(-5, Math.min(5, v)) : 1;
     worldGravityInput.value = level.gravityScale;
     updateLevelSettingsLabel();
   });
@@ -1096,7 +1720,9 @@ function bindToolbar() {
     level = createEmptyLevel('Nouveau niveau');
     level.localKey = null;
     editingRemoteId = null;
+    hiddenLayers.clear();
     syncHeaderInputs(); syncAuthorField(); resizeCanvas(); selectedId = null; render(); renderProps();
+    initUndoHistory();
   });
 
   const loadDemoBtn = document.getElementById('load-demo');
@@ -1106,8 +1732,13 @@ function bindToolbar() {
     level = buildSampleLevel();
     level.localKey = null;
     editingRemoteId = null;
+    hiddenLayers.clear();
     syncHeaderInputs(); syncAuthorField(); resizeCanvas(); selectedId = null; render(); renderProps();
+    initUndoHistory();
   });
+
+  document.getElementById('undo-btn').addEventListener('click', undo);
+  document.getElementById('redo-btn').addEventListener('click', redo);
 
   document.getElementById('save-local').addEventListener('click', () => {
     const key = saveLocalDraft(level);
@@ -1134,7 +1765,9 @@ function bindToolbar() {
         level = normalizeLevel(JSON.parse(reader.result));
         level.localKey = null;
         editingRemoteId = null;
+        hiddenLayers.clear();
         syncHeaderInputs(); syncAuthorField(); resizeCanvas(); selectedId = null; render(); renderProps();
+        initUndoHistory();
         setStatus('Niveau importé ✓');
         showToast('Niveau importé ✓', { type: 'success' });
       } catch {
@@ -1203,6 +1836,40 @@ function bindLevelSettingsModal() {
   doneBtn.addEventListener('click', close);
   modal.addEventListener('click', (e) => { if (e.target === modal) close(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.classList.contains('hidden')) close(); });
+  bindGridShift();
+}
+
+// ---------------------------------------------------------------- grid-shift tool
+// Growing/shrinking the grid (cols/rows, above) only ever adds/removes space
+// at the bottom-right — everything already placed stays pinned to its old
+// (x,y). This is the complement: move EVERY placed entity plus the player
+// spawn(s) by the same (dx,dy) offset in one step, so an author who just grew
+// the grid to make room at the top (say) can push their whole existing
+// layout down into the new space instead of re-dragging every piece by hand.
+// Deliberately does not clamp results to stay on-grid — a shift is often
+// used together with a grid resize where the two together net out fine, and
+// with undo/redo (task #74) now in place, an overshoot is one Ctrl+Z away.
+function shiftGrid(dx, dy) {
+  if (previewMode || (!dx && !dy)) return;
+  for (const ent of level.entities) { ent.x += dx; ent.y += dy; }
+  level.playerStart.x += dx; level.playerStart.y += dy;
+  if (level.playerStart2) { level.playerStart2.x += dx; level.playerStart2.y += dy; }
+  const outOfBounds = (x, y, w = 1, h = 1) => x < 0 || y < 0 || x + w > level.cols || y + h > level.rows;
+  const wentOffGrid = level.entities.some((e) => outOfBounds(e.x, e.y, e.w, e.h))
+    || outOfBounds(level.playerStart.x, level.playerStart.y)
+    || (level.playerStart2 && outOfBounds(level.playerStart2.x, level.playerStart2.y));
+  render();
+  renderProps();
+  if (wentOffGrid) setStatus('Au moins un élément est maintenant hors de la grille visible — ajuste la taille de la grille si besoin.', true);
+}
+
+function bindGridShift() {
+  const stepInput = document.getElementById('shift-step');
+  const step = () => Math.max(1, Math.round(parseFloat(stepInput.value)) || 1);
+  document.getElementById('shift-up').addEventListener('click', () => shiftGrid(0, -step()));
+  document.getElementById('shift-down').addEventListener('click', () => shiftGrid(0, step()));
+  document.getElementById('shift-left').addEventListener('click', () => shiftGrid(-step(), 0));
+  document.getElementById('shift-right').addEventListener('click', () => shiftGrid(step(), 0));
 }
 
 // While playtesting, lets you flip between the builder's "debug" view (grid,
@@ -1233,6 +1900,7 @@ function togglePlaytest() {
     render();
   }
   updateDebugViewBtn();
+  updateUndoRedoButtons();
 }
 
 init();

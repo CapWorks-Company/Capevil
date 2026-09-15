@@ -3,7 +3,7 @@
 // and reused (read-only, no input) by editor.js for in-editor testing.
 import {
   CELL, ENTITY_TYPES, HAZARD_TYPES, SOLID_TYPES,
-  GRAVITY_VECTORS, ACTION_TYPES, PHYSICS,
+  GRAVITY_VECTORS, OPPOSITE_GRAVITY_DIR, ACTION_TYPES, PHYSICS,
 } from './constants.js';
 import { loadKeybinds, buildKeyMap } from './keybindings.js';
 import { sfx, unlockAudio } from './audio-fx.js';
@@ -27,8 +27,15 @@ export class Engine {
     this.onWin = onWin || (() => {});
     this.onStateChange = onStateChange || (() => {});
     this.raw = { left: false, right: false, up: false, down: false, jump: false };
+    // Player 2's own input state/keymap (see constants around "2 joueurs" —
+    // level-model.js's playerStart2) — always built, even for a single-player
+    // level, since it's cheap and keeps the two players perfectly symmetric;
+    // it simply never gets used when this.player2 stays null (see
+    // _resetPlayer).
+    this.raw2 = { left: false, right: false, up: false, down: false, jump: false };
     this.debugTriggers = false;
-    this.keymap = buildKeyMap(loadKeybinds());
+    this.keymap = buildKeyMap(loadKeybinds(1));
+    this.keymap2 = buildKeyMap(loadKeybinds(2));
     this.particles = new ParticleSystem();
     this.shake = { magnitude: 0, duration: 0, time: 0 }; // camera shake, see _triggerShake
     this._keydown = (e) => {
@@ -38,11 +45,11 @@ export class Engine {
       // last had focus (e.g. the mute or keybind button) — without
       // swallowing keystrokes while the player is actually typing somewhere.
       const tag = (e.target && e.target.tagName) || '';
-      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && this.keymap[e.code]) e.preventDefault();
+      if (tag !== 'INPUT' && tag !== 'TEXTAREA' && (this.keymap[e.code] || this.keymap2[e.code])) e.preventDefault();
       this._setKey(e.code, true);
     };
     this._keyup = (e) => this._setKey(e.code, false);
-    this._onKeybindsChanged = () => { this.keymap = buildKeyMap(loadKeybinds()); };
+    this._onKeybindsChanged = () => { this.keymap = buildKeyMap(loadKeybinds(1)); this.keymap2 = buildKeyMap(loadKeybinds(2)); };
     window.addEventListener('keydown', this._keydown);
     window.addEventListener('keyup', this._keyup);
     window.addEventListener('capevil:keybinds-changed', this._onKeybindsChanged);
@@ -56,11 +63,14 @@ export class Engine {
     cancelAnimationFrame(this._raf);
   }
 
+  // A single physical key can drive player 1 and/or player 2 independently
+  // (their keymaps are entirely separate — see keybindings.js), so both are
+  // checked on every key event rather than picking just one.
   _setKey(code, val) {
-    const k = this.keymap[code];
-    if (!k) return;
-    this.raw[k] = val;
-    if (val) this._lastJumpPress = k === 'jump' ? performance.now() : this._lastJumpPress;
+    const k1 = this.keymap[code];
+    if (k1) { this.raw[k1] = val; if (val) this._lastJumpPress = k1 === 'jump' ? performance.now() : this._lastJumpPress; }
+    const k2 = this.keymap2[code];
+    if (k2) this.raw2[k2] = val;
   }
 
   // Full reset: used both on first load and every time the player dies, so a
@@ -111,6 +121,13 @@ export class Engine {
         buttonReady: true,  // (button only) can be pressed again
         awaitingReset: false, // (button, resetAfterActions:'onNextPress') next press reverts instead of firing
         reversed: false,    // (button/plate only) next activation replays its actions undone instead of forward
+        // extended trigger/button/plate activation state — see _activate/
+        // _canActivate/_graceOverlap/_fireTrigger for how each is used
+        disabled: false,     // permanently closed (releaseMode:'finishAndClose', or maxRepeats reached)
+        repeatCount: 0,      // how many times this has fired so far (maxRepeats)
+        cooldownUntil: 0,    // simTime before which it can't fire again (rearmCooldown)
+        graceUntil: 0,       // simTime until which a real release is still forgiven (releaseGrace)
+        activationToken: 0,  // bumped each time a fresh overlap starts, to cancel a stale pending activationDelay
         // goal-door animation state
         closing: false,
         closeStart: 0,
@@ -125,11 +142,9 @@ export class Engine {
     }
   }
 
-  _resetPlayer() {
-    const lvl = this.level;
-    const ps = lvl.playerStart || {};
-    this.player = {
-      x: this.respawn.x * CELL, y: this.respawn.y * CELL,
+  _makePlayer(ps, respawnPt) {
+    const player = {
+      x: respawnPt.x * CELL, y: respawnPt.y * CELL,
       w: CELL * 0.7, h: CELL * 0.7,
       vx: 0, vy: 0,
       gravityDir: ps.gravityDir || 'down',
@@ -139,10 +154,35 @@ export class Engine {
       onGround: false,
       facing: 1,
       windVx: 0, windVy: 0, // persistent push from FAN zones, layered on top of input-driven velocity
+      ridingId: null, // id of the solid currently carrying the player — see _updatePhysics's carry step
     };
     // center the smaller hitbox inside its cell
-    this.player.x += (CELL - this.player.w) / 2;
-    this.player.y += (CELL - this.player.h) / 2;
+    player.x += (CELL - player.w) / 2;
+    player.y += (CELL - player.h) / 2;
+    return player;
+  }
+
+  // Builds player 1 always, and player 2 only when the level enables a
+  // second player (lvl.playerStart2 set — see level-model.js). Player 2
+  // always respawns at the same authored OFFSET from player 1's spawn, even
+  // after a checkpoint moves the shared respawn anchor (`this.respawn`) —
+  // so a checkpoint doesn't need its own separate tracking per player, and
+  // the two players keep their relative formation across respawns.
+  _resetPlayer() {
+    const lvl = this.level;
+    const ps = lvl.playerStart || {};
+    this.player = this._makePlayer(ps, this.respawn);
+    if (lvl.playerStart2) {
+      const ps2 = lvl.playerStart2;
+      const dx = ps2.x - ps.x, dy = ps2.y - ps.y;
+      this.player2 = this._makePlayer(ps2, { x: this.respawn.x + dx, y: this.respawn.y + dy });
+    } else {
+      this.player2 = null;
+    }
+    // Every per-player system (physics, fans, hazards, camera…) just loops
+    // over this array — it has one entry in a single-player level, two once
+    // playerStart2 is set, and nothing else needs to special-case the count.
+    this.players = this.player2 ? [this.player, this.player2] : [this.player];
   }
 
   // Puts every runtime entity back to its authored definition (position,
@@ -164,6 +204,7 @@ export class Engine {
       rt.looping = false; rt.holding = false; rt.buttonReady = true; rt.awaitingReset = false; rt.reversed = false;
       rt.closing = false; rt.closeStart = 0; rt.doorProgress = 0; rt.sealed = false;
       rt.vy = 0;
+      rt.disabled = false; rt.repeatCount = 0; rt.cooldownUntil = 0; rt.graceUntil = 0; rt.activationToken = 0;
       if (def.type !== ENTITY_TYPES.CHECKPOINT) rt.activated = false;
     }
   }
@@ -198,19 +239,25 @@ export class Engine {
   stop() { cancelAnimationFrame(this._raf); }
 
   // ---- effective input, accounting for troll inversion ----
-  _input() {
-    let { left, right, up, down, jump } = this.raw;
-    if (this.player.invert.horizontal) [left, right] = [right, left];
-    if (this.player.invert.vertical) [up, down] = [down, up];
+  // `p` selects which player's raw input/keymap to read — player 2's is
+  // entirely separate from player 1's (see the constructor / keybindings.js).
+  _input(p = this.player) {
+    const raw = p === this.player2 ? this.raw2 : this.raw;
+    let { left, right, up, down, jump } = raw;
+    if (p.invert.horizontal) [left, right] = [right, left];
+    if (p.invert.vertical) [up, down] = [down, up];
     return { left, right, up, down, jump };
   }
 
-  killPlayer() {
+  // A death always resets the WHOLE level (both players, all triggers) —
+  // see the class-level comment on reset(). `p` is only used to anchor the
+  // death burst at whichever player actually died.
+  killPlayer(p = this.player) {
     if (this.dead) return;
     this.dead = true;
     this.deaths++;
     sfx.death();
-    this.particles.deathBurst(this.player.x + this.player.w / 2, this.player.y + this.player.h / 2);
+    this.particles.deathBurst(p.x + p.w / 2, p.y + p.h / 2);
     this._triggerShake(10, 0.35);
     this.onStateChange({ deaths: this.deaths });
     this.onDeath();
@@ -221,11 +268,11 @@ export class Engine {
     }, 450);
   }
 
-  winLevel() {
+  winLevel(p = this.player) {
     if (this.won) return;
     this.won = true;
     sfx.win();
-    this.particles.confetti(this.player.x + this.player.w / 2, this.player.y + this.player.h / 2);
+    this.particles.confetti(p.x + p.w / 2, p.y + p.h / 2);
     this.onWin({ deaths: this.deaths });
   }
 
@@ -233,15 +280,18 @@ export class Engine {
   // doorway (and hidden — "téléporté dedans"), the door slides shut over
   // DOOR_CLOSE_DURATION, and only once it's fully closed does the level
   // actually count as won. Gameplay (input/physics/triggers) is frozen for
-  // the whole animation via the `finishing` flag checked in update().
+  // the whole animation via the `finishing` flag checked in update(). On a
+  // 2-player level, whichever player reaches the goal first triggers the
+  // close — BOTH players are pulled inside and finish together.
   _startDoorClose(rt, box) {
     this.finishing = true;
     rt.closing = true;
     rt.closeStart = this.simTime;
-    const p = this.player;
-    p.vx = 0; p.vy = 0;
-    p.x = rt.x + box.w / 2 - p.w / 2;
-    p.y = rt.y + box.h / 2 - p.h / 2;
+    for (const p of this.players) {
+      p.vx = 0; p.vy = 0;
+      p.x = rt.x + box.w / 2 - p.w / 2;
+      p.y = rt.y + box.h / 2 - p.h / 2;
+    }
     this._hidePlayerForDoor = true;
     sfx.teleport();
   }
@@ -275,11 +325,11 @@ export class Engine {
     if (!this.finishing) {
       this._applyFans(dt);
       this._updateCrates(dt);
-      this._updatePhysics(dt);
+      for (const p of this.players) this._updatePhysics(p, dt);
       this._checkTriggers();
       this._checkButtons();
       this._checkPlates();
-      this._checkHazardsAndGoal();
+      for (const p of this.players) this._checkHazardsAndGoal(p);
       this._checkTeleporters();
     }
     this._updateSpinnerAngles(dt);
@@ -313,9 +363,21 @@ export class Engine {
     for (const rt of this.runtime.values()) {
       if (rt.def.type === ENTITY_TYPES.SPINNER) {
         const speed = (rt.def.props && rt.def.props.speed) || 2;
-        rt.angle += speed * dt;
+        // 'ccw' just flips the sign of the increment — same blades, same
+        // math, spinning the other way around.
+        const dir = (rt.def.props && rt.def.props.direction === 'ccw') ? -1 : 1;
+        rt.angle += speed * dir * dt;
       }
     }
+  }
+
+  // Purely cosmetic rotation shared by entities with an asymmetric shape and
+  // a `props.facing` (BUTTON, PLATE — mirrors SPIKE's own facing concept).
+  // 'up' is the identity angle (0) on purpose: it's the default/backfilled
+  // value, so older saved levels render pixel-identical to before this
+  // feature existed.
+  _facingAngle(facing) {
+    return { up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[facing] || 0;
   }
 
   // Continuous wind push from FAN zones while the player is within range
@@ -324,9 +386,12 @@ export class Engine {
   // (in cells, measured from the fan's own edge along the blow direction),
   // optionally fading out toward the edge of that range ("diminution avec la
   // distance") instead of pushing at full force right up to the cutoff.
+  // Handles every player at once (rather than being called per-player) so
+  // each fan's ambient wind stream is emitted exactly once per frame no
+  // matter how many players there are — only the "does it push THIS player"
+  // part below is repeated per player.
   _applyFans(dt) {
-    const p = this.player;
-    let pushedX = false, pushedY = false;
+    const pushed = this.players.map(() => ({ x: false, y: false }));
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.FAN || rt.passable) continue;
       const props = rt.def.props || {};
@@ -362,36 +427,42 @@ export class Engine {
         }
       }
 
-      if (!this._overlap(p, box)) continue;
+      for (let i = 0; i < this.players.length; i++) {
+        const p = this.players[i];
+        if (!this._overlap(p, box)) continue;
 
-      let distCells = 0;
-      if (v.x > 0) distCells = Math.max(0, (p.x - (rt.x + fanW)) / CELL);
-      else if (v.x < 0) distCells = Math.max(0, (rt.x - (p.x + p.w)) / CELL);
-      else if (v.y > 0) distCells = Math.max(0, (p.y - (rt.y + fanH)) / CELL);
-      else if (v.y < 0) distCells = Math.max(0, (rt.y - (p.y + p.h)) / CELL);
+        let distCells = 0;
+        if (v.x > 0) distCells = Math.max(0, (p.x - (rt.x + fanW)) / CELL);
+        else if (v.x < 0) distCells = Math.max(0, (rt.x - (p.x + p.w)) / CELL);
+        else if (v.y > 0) distCells = Math.max(0, (p.y - (rt.y + fanH)) / CELL);
+        else if (v.y < 0) distCells = Math.max(0, (rt.y - (p.y + p.h)) / CELL);
 
-      let strength = 1;
-      if (props.falloff && range > 0) strength = Math.max(0, 1 - distCells / range);
-      if (strength <= 0) continue;
+        let strength = 1;
+        if (props.falloff && range > 0) strength = Math.max(0, 1 - distCells / range);
+        if (strength <= 0) continue;
 
-      const force = (props.force ?? 1) * strength;
-      const accel = PHYSICS.GRAVITY_ACCEL * force;
-      const maxSpeed = PHYSICS.MOVE_SPEED * 1.8 * force;
-      if (v.x) { pushedX = true; p.windVx += v.x * accel * dt; p.windVx = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVx)); }
-      if (v.y) { pushedY = true; p.windVy += v.y * accel * dt; p.windVy = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVy)); }
-      // Same fixed-rate accumulator as the ambient stream above, just
-      // centered on the player while they're actually being pushed.
-      rt.pushWindAccum = (rt.pushWindAccum || 0) + dt * 12 * Math.max(0.3, strength);
-      while (rt.pushWindAccum >= 1) {
-        rt.pushWindAccum -= 1;
-        this.particles.wind(p.x + p.w / 2, p.y + p.h / 2, v, strength);
+        const force = (props.force ?? 1) * strength;
+        const accel = PHYSICS.GRAVITY_ACCEL * force;
+        const maxSpeed = PHYSICS.MOVE_SPEED * 1.8 * force;
+        if (v.x) { pushed[i].x = true; p.windVx += v.x * accel * dt; p.windVx = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVx)); }
+        if (v.y) { pushed[i].y = true; p.windVy += v.y * accel * dt; p.windVy = Math.max(-maxSpeed, Math.min(maxSpeed, p.windVy)); }
+        // Same fixed-rate accumulator as the ambient stream above, just
+        // centered on the player while they're actually being pushed.
+        rt.pushWindAccum = (rt.pushWindAccum || 0) + dt * 12 * Math.max(0.3, strength);
+        while (rt.pushWindAccum >= 1) {
+          rt.pushWindAccum -= 1;
+          this.particles.wind(p.x + p.w / 2, p.y + p.h / 2, v, strength);
+        }
       }
     }
-    // decay back to zero once the player leaves every fan zone
-    if (!pushedX) p.windVx *= 0.8;
-    if (!pushedY) p.windVy *= 0.8;
-    if (Math.abs(p.windVx) < 1) p.windVx = 0;
-    if (Math.abs(p.windVy) < 1) p.windVy = 0;
+    // decay back to zero once a player leaves every fan zone
+    for (let i = 0; i < this.players.length; i++) {
+      const p = this.players[i];
+      if (!pushed[i].x) p.windVx *= 0.8;
+      if (!pushed[i].y) p.windVy *= 0.8;
+      if (Math.abs(p.windVx) < 1) p.windVx = 0;
+      if (Math.abs(p.windVy) < 1) p.windVy = 0;
+    }
   }
 
   _solidRects() {
@@ -403,46 +474,87 @@ export class Engine {
       // obstacle — safe to touch and stand on — while a plain hazard stays
       // non-solid (you don't get stuck on a lethal spike, you just die).
       if (!SOLID_TYPES.has(t) && !(HAZARD_TYPES.has(t) && rt.harmless)) continue;
-      // A block or platform marked "tueur" flips the same way in reverse: it
+      // A block (or crate) marked "tueur" flips the same way in reverse: it
       // must stay non-solid so the player can actually overlap it (otherwise
-      // normal collision would just push them out before death could ever be
-      // detected) — _checkHazardsAndGoal is what kills them on that overlap.
-      if ((t === ENTITY_TYPES.BLOCK || t === ENTITY_TYPES.PLATFORM) && rt.deadly) continue;
+      // normal collision would just push them out before death could ever
+      // be detected) — _checkHazardsAndGoal is what kills them on that
+      // overlap.
+      if ((t === ENTITY_TYPES.BLOCK || t === ENTITY_TYPES.CRATE) && rt.deadly) continue;
       rects.push({ id: rt.def.id, x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL, dx: rt.dx || 0, dy: rt.dy || 0 });
     }
     return rects;
   }
 
-  // Crates are pushable physics cubes, not scriptable "elements" (no
-  // action-targeting, no toggles) — they just fall with gravity and can be
-  // shoved sideways by the player. Runs BEFORE _updatePhysics each frame so
-  // a crate that fell (or was left mid-air after a solid moved away) settles
-  // before the player's own collision is resolved against it this same
-  // frame. Crates are already in SOLID_TYPES, so the player-vs-crate side of
-  // this (walking into one, standing on one) is handled for free by the
-  // existing generic solid-collision code — this method only has to give
-  // the crate its own falling motion.
+  // Crates are pushable physics cubes — not action-targetable like a
+  // trigger/button/plate, but they do carry their own toggles (traversable /
+  // invisible / tueur) and a couple of numeric props (gravity, difficulté à
+  // pousser). Runs BEFORE _updatePhysics each frame so a crate that fell (or
+  // was left mid-air after a solid moved away) settles before the player's
+  // own collision is resolved against it this same frame. Crates are already
+  // in SOLID_TYPES, so the player-vs-crate side of this (walking into one,
+  // standing on one) is handled for free by the existing generic
+  // solid-collision code — this method only has to give the crate its own
+  // falling motion.
   _updateCrates(dt) {
-    const gravityScale = Number.isFinite(this.level.gravityScale) ? this.level.gravityScale : 1;
-    const maxFall = PHYSICS.MAX_FALL_SPEED * gravityScale;
+    const worldGravityScale = Number.isFinite(this.level.gravityScale) ? this.level.gravityScale : 1;
     const solids = this._solidRects(); // snapshot once — good enough for one frame of crate-vs-crate stacking
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.CRATE || rt.passable) continue;
-      rt.vy = (rt.vy || 0) + PHYSICS.GRAVITY_ACCEL * gravityScale * dt;
-      if (rt.vy > maxFall) rt.vy = maxFall;
+      // A crate's own "gravité" (props.gravity, default 1, can be negative)
+      // multiplies the world's gravityScale — either one being negative
+      // (but not both) makes THIS crate float upward instead of falling,
+      // independently of every other crate and of the player. `gy` is the
+      // resulting effective fall direction along y (+1 normal, -1 flipped);
+      // `gMag` is always non-negative so the accel/terminal-velocity math
+      // below stays exactly the pre-existing (positive-only) formula, just
+      // projected onto whichever direction actually applies this frame.
+      const crateGravity = Number.isFinite(rt.def.props && rt.def.props.gravity) ? rt.def.props.gravity : 1;
+      const totalScale = worldGravityScale * crateGravity;
+      const gMag = Math.abs(totalScale);
+      const gy = totalScale < 0 ? -1 : 1;
+      const maxFall = PHYSICS.MAX_FALL_SPEED * gMag;
+      rt.vy = (rt.vy || 0) + PHYSICS.GRAVITY_ACCEL * gy * gMag * dt;
+      const fallSpeed = rt.vy * gy;
+      if (fallSpeed > maxFall) rt.vy = maxFall * gy;
+      const w = rt.def.w * CELL, h = rt.def.h * CELL;
+      // Remembered so the swept check below can tell whether a solid's edge
+      // was crossed THIS frame, not just whether the final position happens
+      // to overlap it — see the comment there.
+      const startY = rt.y;
       rt.y += rt.vy * dt;
-      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+      const box = { x: rt.x, y: rt.y, w, h };
       for (const r of solids) {
         if (r.id === rt.def.id) continue; // never collide with itself
+        if (box.x + box.w <= r.x || box.x >= r.x + r.w) continue; // no horizontal overlap: irrelevant
+        // Swept (continuous) check: a single frame's fall distance can be
+        // larger than a solid's own thickness (a high "Condition du monde"
+        // gravity multiplier makes this easy to hit even against an
+        // ordinary 1-cell-thick block) — in that case the crate's box can
+        // jump clean from "above" to "below" the solid without its FINAL
+        // position ever overlapping it, so a plain end-of-frame overlap
+        // test misses the collision entirely and the crate tunnels straight
+        // through instead of landing on top of (or under) it. Comparing the
+        // solid's edge against where the crate started and ended this frame
+        // catches that crossing regardless of how far it moved.
+        if (rt.vy > 0 && startY + h <= r.y && box.y + box.h >= r.y) {
+          rt.y = r.y - box.h; rt.vy = 0; box.y = rt.y; continue;
+        }
+        if (rt.vy < 0 && startY >= r.y + r.h && box.y <= r.y + r.h) {
+          rt.y = r.y + r.h; rt.vy = 0; box.y = rt.y; continue;
+        }
+        // Normal discrete overlap check: covers slow falls, resting contact,
+        // and crate-vs-crate stacking against this frame's still-mid-fall
+        // neighbors (their solids() snapshot is from before this loop ran).
         if (!this._overlap(box, r)) continue;
         if (rt.vy > 0) rt.y = r.y - box.h;
         else if (rt.vy < 0) rt.y = r.y + r.h;
         rt.vy = 0;
         box.y = rt.y;
       }
-      // out-of-bounds crates (pushed off an edge into the void) just stop
-      // falling once well past the level — no need to keep integrating forever
-      if (rt.y > this.level.rows * CELL + CELL * 4) rt.vy = 0;
+      // out-of-bounds crates (pushed off an edge into the void, or floated
+      // off the top under negative gravity) just stop moving once well past
+      // the level — no need to keep integrating forever
+      if (rt.y > this.level.rows * CELL + CELL * 4 || rt.y < -CELL * 4) rt.vy = 0;
     }
   }
 
@@ -472,8 +584,7 @@ export class Engine {
   // few pixels closer or align with a gap it was actually narrow enough to
   // pass through. Clamping the move to the nearest obstacle instead lets it
   // creep up flush frame by frame, same as the player's own collision does.
-  _pushCrates() {
-    const p = this.player;
+  _pushCrates(p, dt) {
     if (p.vx === 0) return;
     const pushDir = p.vx > 0 ? 1 : -1;
     for (const rt of this.runtime.values()) {
@@ -483,6 +594,18 @@ export class Engine {
       const penetration = pushDir > 0 ? (p.x + p.w - box.x) : (box.x + box.w - p.x);
       if (penetration <= 0) continue;
       let maxMove = penetration;
+      // "Difficulté à pousser" (props.pushDifficulty, default/minimum 1 =
+      // normal): resolving the player's ENTIRE per-frame penetration into
+      // crate movement, unconditionally (the block below this comment,
+      // untouched), is what makes a normal crate keep lockstep with the
+      // player — effectively weightless. A difficulty above 1 caps how far
+      // THIS frame's push can move the crate below that full penetration;
+      // the player's own collision then simply stops them at the crate's
+      // slower pace, which reads as "this one's harder to shove". Left
+      // alone (<=1, the default) there is no cap at all, so normal crates
+      // are bit-for-bit identical to before this feature existed.
+      const pushDifficulty = Number.isFinite(rt.def.props && rt.def.props.pushDifficulty) ? rt.def.props.pushDifficulty : 1;
+      if (pushDifficulty > 1) maxMove = Math.min(maxMove, (PHYSICS.MOVE_SPEED * dt) / pushDifficulty);
       if (pushDir > 0) maxMove = Math.min(maxMove, this.level.cols * CELL - (box.x + box.w));
       else maxMove = Math.min(maxMove, box.x);
       for (const r of this._solidRects()) {
@@ -518,18 +641,58 @@ export class Engine {
     return [cx, g.y > 0 ? p.y + p.h : p.y];
   }
 
-  _updatePhysics(dt) {
-    const p = this.player;
-    const g = GRAVITY_VECTORS[p.gravityDir];
+  // Rigid platform carry: if the player was resting on a moving solid as of
+  // last frame, translate them by that solid's delta for THIS frame before
+  // anything else moves. This has to be an unconditional translation, not a
+  // "does the player still overlap it" re-check — the old carry only
+  // nudged the player sideways (perpendicular to gravity) whenever
+  // _resolveAxis happened to re-detect overlap that same frame, which is
+  // fine for a slow-moving platform but breaks down for a fast one: a
+  // platform rising quickly enough can end up with its post-move rect no
+  // longer overlapping the player's pre-move position at all (a discrete,
+  // non-swept check), so the player is left behind — visibly passing
+  // through/above the platform instead of riding it up. Moving the player
+  // in lockstep first, then letting the normal collision pass re-settle
+  // them against the solid's new position, makes the ride immune to that
+  // regardless of how fast the platform moves.
+  _carryRider(p) {
+    if (!p.ridingId) return;
+    const ride = this.runtime.get(p.ridingId);
+    p.ridingId = null; // re-armed below by _resolveAxis if still grounded on something this frame
+    if (!ride || ride.passable) return;
+    if (ride.dx) p.x += ride.dx;
+    if (ride.dy) p.y += ride.dy;
+  }
+
+  // The world's gravityScale (see level.gravityScale / "Condition du monde")
+  // can be negative — that's what lets an author flip gravity as a mechanic
+  // instead of only ever scaling its strength. Rather than thread a signed
+  // scale through every direction-dependent calculation (grounding side,
+  // jump impulse, feet-point, sprite rotation…), this bakes the flip into
+  // the direction itself: negative world gravity means "pull toward the
+  // OPPOSITE of gravityDir" instead of toward it. Every caller below then
+  // uses this effective direction together with the scale's plain
+  // MAGNITUDE (Math.abs), so all the existing direction-aware physics code
+  // (which was only ever written/tested for a non-negative scale) keeps
+  // working unchanged — it just sees a different, already-correct "down".
+  _effectiveGravityDir(dir) {
+    const gs = Number.isFinite(this.level.gravityScale) ? this.level.gravityScale : 1;
+    return gs < 0 ? (OPPOSITE_GRAVITY_DIR[dir] || dir) : dir;
+  }
+
+  _updatePhysics(p, dt) {
+    this._carryRider(p);
     const gravityScale = Number.isFinite(this.level.gravityScale) ? this.level.gravityScale : 1;
-    const input = this._input();
+    const g = GRAVITY_VECTORS[this._effectiveGravityDir(p.gravityDir)];
+    const gMag = Math.abs(gravityScale);
+    const input = this._input(p);
     const wasOnGround = p.onGround;
 
     // acceleration due to gravity
-    p.vx += g.x * PHYSICS.GRAVITY_ACCEL * gravityScale * dt;
-    p.vy += g.y * PHYSICS.GRAVITY_ACCEL * gravityScale * dt;
+    p.vx += g.x * PHYSICS.GRAVITY_ACCEL * gMag * dt;
+    p.vy += g.y * PHYSICS.GRAVITY_ACCEL * gMag * dt;
     // clamp fall speed along gravity axis
-    const maxFall = PHYSICS.MAX_FALL_SPEED * gravityScale;
+    const maxFall = PHYSICS.MAX_FALL_SPEED * gMag;
     const fallSpeed = p.vx * g.x + p.vy * g.y;
     if (fallSpeed > maxFall) {
       p.vx = g.x * maxFall + p.vx * (1 - Math.abs(g.x));
@@ -572,7 +735,7 @@ export class Engine {
     p.onGround = false;
 
     p.x += p.vx * dt;
-    this._pushCrates(); // may shove a crate out of the way before x-collision resolves
+    this._pushCrates(p, dt); // may shove a crate out of the way before x-collision resolves
     rects = this._solidRects(); // re-snapshot: a pushed crate's rect must reflect its new position
     this._resolveAxis(p, rects, 'x', g);
     p.y += p.vy * dt;
@@ -587,7 +750,7 @@ export class Engine {
     const margin = CELL * 2;
     if (p.x < -margin || p.y < -margin ||
         p.x > this.level.cols * CELL + margin || p.y > this.level.rows * CELL + margin) {
-      this.killPlayer();
+      this.killPlayer(p);
     }
   }
 
@@ -622,10 +785,12 @@ export class Engine {
         : (gravitySign !== 0 && vSign === gravitySign);
       if (pushingInto) {
         p.onGround = true;
-        // Conveyor behaviour: carry the player along with a moving platform
-        // (the axis perpendicular to gravity, i.e. the one the player walks on).
-        if (axis === 'y' && r.dx) p.x += r.dx;
-        if (axis === 'x' && r.dy) p.y += r.dy;
+        // Remember what the player is standing on so _carryRider() can move
+        // them in lockstep with it next frame (handles the platform moving
+        // along EITHER axis — up/down or sideways — not just perpendicular
+        // to gravity); see _carryRider's comment for why this replaced the
+        // old same-frame overlap-based nudge.
+        p.ridingId = r.id;
       }
     }
   }
@@ -645,8 +810,12 @@ export class Engine {
     return (dx * dx + dy * dy) < r * r;
   }
 
-  _checkHazardsAndGoal() {
-    const p = this.player;
+  // Run once per player (see update()) — on a 2-player level, EITHER player
+  // touching a hazard/deadly block kills (the whole level resets, per
+  // killPlayer's own doc comment), EITHER one reaching the goal starts the
+  // door closing for both (see _startDoorClose), and a checkpoint activates
+  // (moving the shared respawn anchor) the moment either one steps on it.
+  _checkHazardsAndGoal(p) {
     for (const rt of this.runtime.values()) {
       const t = rt.def.type;
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
@@ -664,15 +833,15 @@ export class Engine {
         // collision resolution keeps the player from ever truly overlapping
         // one; "traversable" hazards have zero collision, so overlap here
         // just means passing harmlessly through. A plain hazard still kills.
-        if (!rt.harmless && !rt.passable) this.killPlayer();
+        if (!rt.harmless && !rt.passable) this.killPlayer(p);
         continue;
       }
-      if ((t === ENTITY_TYPES.BLOCK || t === ENTITY_TYPES.PLATFORM) && rt.deadly) {
+      if ((t === ENTITY_TYPES.BLOCK || t === ENTITY_TYPES.CRATE) && rt.deadly) {
         // Mirrors the hazard rule above but with the polarity flipped: a
-        // block/platform is safe by default, "tueur" makes it lethal, and
+        // block/crate is safe by default, "tueur" makes it lethal, and
         // "traversable" still always wins (walk straight through, no harm
         // either way).
-        if (!rt.passable) this.killPlayer();
+        if (!rt.passable) this.killPlayer(p);
         continue;
       }
       if (t === ENTITY_TYPES.SPRING && !rt.passable) {
@@ -694,25 +863,29 @@ export class Engine {
     }
   }
 
-  // Teleporters sharing the same `frequency` cycle the player through the
+  // Teleporters sharing the same `frequency` cycle a player through the
   // group in authored order. When "sens unique" is on (synced across the
   // whole frequency group by the editor), both the departure AND the
   // arrival teleporter are marked used — otherwise the player could just
-  // walk back onto the one they arrived at and take the return trip.
+  // walk back onto the one they arrived at and take the return trip. On a
+  // 2-player level, either player can trigger a teleporter independently,
+  // but still at most one teleport total per frame (matching the original
+  // single-player behavior) — checked in player order, first match wins.
   _checkTeleporters() {
     if (this._teleportCooldown > 0) return;
-    const p = this.player;
-    for (const rt of this.runtime.values()) {
-      if (rt.def.type !== ENTITY_TYPES.TELEPORTER) continue;
-      if (rt.passable || rt.usedOnce) continue;
-      const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
-      if (!this._overlap(p, box)) continue;
-      this._teleportViaGroup(rt);
-      break; // at most one teleport per frame
+    for (const p of this.players) {
+      for (const rt of this.runtime.values()) {
+        if (rt.def.type !== ENTITY_TYPES.TELEPORTER) continue;
+        if (rt.passable || rt.usedOnce) continue;
+        const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
+        if (!this._overlap(p, box)) continue;
+        this._teleportViaGroup(rt, p);
+        return; // at most one teleport per frame
+      }
     }
   }
 
-  _teleportViaGroup(rt) {
+  _teleportViaGroup(rt, p = this.player) {
     const freq = (rt.def.props && rt.def.props.frequency) || 1;
     const group = this.level.entities.filter(e => e.type === ENTITY_TYPES.TELEPORTER && ((e.props && e.props.frequency) || 1) === freq);
     if (group.length < 2) return;
@@ -720,7 +893,6 @@ export class Engine {
     const nextDef = group[(idx + 1) % group.length];
     const targetRt = this.runtime.get(nextDef.id);
     if (!targetRt) return;
-    const p = this.player;
     p.x = targetRt.x + (nextDef.w * CELL - p.w) / 2;
     p.y = targetRt.y + (nextDef.h * CELL - p.h) / 2;
     this._teleportCooldown = 0.5;
@@ -731,19 +903,84 @@ export class Engine {
     }
   }
 
-  // A trigger always fires when the player enters it (re-arms once they
-  // leave, so it can fire again on a later pass) — no separate "mode" to
-  // configure. If "boucle infinie" is on, entering it once kicks off a
-  // self-repeating cycle instead of a single pass.
+  // Whether the given activator kind(s) currently overlap `box`, per this
+  // entity's `props.activator` ('player' | 'crate' | 'both'). Lets a
+  // trigger/button/plate be stepped on by the player, weighed down by a
+  // resting crate, or either — see constants.js's ACTIVATOR_MODES.
+  _activatorOverlap(rt, box) {
+    const props = rt.def.props || {};
+    const mode = props.activator || (rt.def.type === ENTITY_TYPES.PLATE ? 'both' : 'player');
+    // Either player can activate it (2-player level or not — this.players
+    // always has at least player 1).
+    if ((mode === 'player' || mode === 'both') && this.players.some(p => this._overlap(p, box))) return true;
+    if ((mode === 'crate' || mode === 'both') && this._crateOverlapping(box)) return true;
+    return false;
+  }
+
+  // Extends a raw overlap reading by `props.releaseGrace` seconds: once
+  // truly overlapping, a brief drop-out (a stray step off the edge, a jump
+  // that clears it for a moment) still reads as "still overlapping" for up
+  // to `releaseGrace` seconds, so it isn't mistaken for a genuine release.
+  // With releaseGrace at 0 (the default) this is just the raw reading.
+  _graceOverlap(rt, rawOverlapping) {
+    const grace = (rt.def.props && rt.def.props.releaseGrace) || 0;
+    if (rawOverlapping) { rt.graceUntil = 0; return true; }
+    if (grace > 0) {
+      if (!rt.graceUntil) rt.graceUntil = this.simTime + grace;
+      if (this.simTime < rt.graceUntil) return true;
+    }
+    rt.graceUntil = 0;
+    return false;
+  }
+
+  // Whether this trigger/button/plate is currently allowed to fire at all —
+  // false once permanently closed (releaseMode:'finishAndClose', or
+  // maxRepeats reached) or while still cooling down (rearmCooldown).
+  _canActivate(rt) {
+    if (rt.disabled) return false;
+    if (rt.cooldownUntil && this.simTime < rt.cooldownUntil) return false;
+    return true;
+  }
+
+  // Defers the actual firing by `props.activationDelay` seconds (0 = fire
+  // immediately, the original behavior). If the activator leaves (beyond any
+  // releaseGrace) or the entity gets re-armed/disabled before the delay
+  // elapses, the pending activation is silently dropped instead of firing —
+  // `onCancel` (optional) lets the caller undo any "reserved" state it set
+  // when it first decided to activate (e.g. a button's buttonReady flag).
+  _activate(rt, onFire, onCancel) {
+    const delay = (rt.def.props && rt.def.props.activationDelay) || 0;
+    if (delay <= 0) { onFire(); return; }
+    rt.activationToken = (rt.activationToken || 0) + 1;
+    const token = rt.activationToken;
+    this.scheduled.push({
+      time: this.simTime + delay,
+      run: () => {
+        if (rt.activationToken !== token || !rt.wasOverlapping || !this._canActivate(rt)) {
+          if (onCancel) onCancel();
+          return;
+        }
+        onFire();
+      },
+    });
+  }
+
+  // A trigger always fires when the player (or a crate, depending on
+  // `activator`) enters it — re-arms once they leave (past any releaseGrace),
+  // so it can fire again on a later pass, unless maxRepeats/releaseMode
+  // 'finishAndClose' has permanently closed it. If "boucle infinie" is on,
+  // entering it once kicks off a self-repeating cycle instead of a single
+  // pass.
   _checkTriggers() {
-    const p = this.player;
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.TRIGGER) continue;
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
-      const overlapping = this._overlap(p, box);
-      if (overlapping && !rt.wasOverlapping) {
-        if (rt.def.props && rt.def.props.loop) this._fireLoop(rt);
-        else this._fireTrigger(rt);
+      const overlapping = this._graceOverlap(rt, this._activatorOverlap(rt, box));
+      if (overlapping && !rt.wasOverlapping && this._canActivate(rt)) {
+        this._activate(rt, () => {
+          if (rt.def.props && rt.def.props.loop) this._fireLoop(rt);
+          else this._fireTrigger(rt);
+        });
       }
       rt.wasOverlapping = overlapping;
     }
@@ -751,51 +988,54 @@ export class Engine {
 
   // A button is a visible, physical switch: pressing it fires its actions;
   // it becomes pressable again as soon as those actions finish playing (no
-  // fixed cooldown to configure). By default every press replays the same
-  // actions forward. If "Inversement des actions" is turned on, presses
-  // instead alternate between playing the actions forward and playing them
-  // undone — "comme si on inversait le sens du temps" — via _fireTrigger's
-  // built-in forward/reverse toggle (see below), so a second press naturally
-  // puts everything back the way it was. "Boucle infinie" instead turns one
-  // press into a self-repeating cycle forever (each cycle of the loop also
-  // alternates the same way, when reversible is on).
+  // fixed cooldown to configure, unless rearmCooldown adds one on top). By
+  // default every press replays the same actions forward. If "Inversement
+  // des actions" is turned on, presses instead alternate between playing the
+  // actions forward and playing them undone — "comme si on inversait le sens
+  // du temps" — via _fireTrigger's built-in forward/reverse toggle (see
+  // below), so a second press naturally puts everything back the way it was.
+  // "Boucle infinie" instead turns one press into a self-repeating cycle
+  // forever (each cycle of the loop also alternates the same way, when
+  // reversible is on).
   _checkButtons() {
-    const p = this.player;
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.BUTTON) continue;
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
-      const overlapping = this._overlap(p, box);
+      const overlapping = this._graceOverlap(rt, this._activatorOverlap(rt, box));
       const props = rt.def.props || {};
-      if (overlapping && !rt.wasOverlapping && rt.buttonReady) {
+      if (overlapping && !rt.wasOverlapping && rt.buttonReady && this._canActivate(rt)) {
         sfx.button();
         if (props.loop) {
-          this._fireLoop(rt);
+          this._activate(rt, () => this._fireLoop(rt));
         } else {
-          this._fireTrigger(rt);
-          rt.buttonReady = false;
-          const finishAt = this._actionsFinishTime(rt);
-          this.scheduled.push({ time: finishAt, run: () => { rt.buttonReady = true; } });
+          rt.buttonReady = false; // reserved immediately so a re-entry mid-delay can't double-press
+          this._activate(rt, () => {
+            this._fireTrigger(rt);
+            const finishAt = this._actionsFinishTime(rt);
+            this.scheduled.push({ time: finishAt, run: () => { rt.buttonReady = true; } });
+          }, () => { rt.buttonReady = true; });
         }
       }
       rt.wasOverlapping = overlapping;
     }
   }
 
-  // A pressure plate repeats its actions for as long as the player stays on
-  // it (one cycle right away, then again every time the previous cycle
-  // finishes — forward every time by default, or alternating forward/reverse
-  // each cycle when "Inversement des actions" is on, same opt-in as a
-  // button), stopping the moment they step off — unless "boucle infinie" is
-  // set, in which case one press starts a cycle that never stops.
+  // A pressure plate repeats its actions for as long as the player (or a
+  // resting crate, depending on `activator`) stays on it (one cycle right
+  // away, then again every time the previous cycle finishes — forward every
+  // time by default, or alternating forward/reverse each cycle when
+  // "Inversement des actions" is on, same opt-in as a button), stopping the
+  // moment the activator leaves (past any releaseGrace) — unless "boucle
+  // infinie" is set, in which case one press starts a cycle that never
+  // stops.
   _checkPlates() {
-    const p = this.player;
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.PLATE) continue;
       const box = { x: rt.x, y: rt.y, w: rt.def.w * CELL, h: rt.def.h * CELL };
-      const overlapping = this._overlap(p, box) || this._crateOverlapping(box);
-      if (overlapping && !rt.wasOverlapping) {
-        if (rt.def.props && rt.def.props.loop) this._fireLoop(rt);
-        else this._startHold(rt);
+      const overlapping = this._graceOverlap(rt, this._activatorOverlap(rt, box));
+      if (overlapping && !rt.wasOverlapping && this._canActivate(rt)) {
+        if (rt.def.props && rt.def.props.loop) this._activate(rt, () => this._fireLoop(rt));
+        else this._activate(rt, () => this._startHold(rt));
       }
       if (!overlapping) rt.holding = false;
       rt.wasOverlapping = overlapping;
@@ -807,6 +1047,7 @@ export class Engine {
     rt.holding = true;
     const cycle = () => {
       if (!rt.holding) return;
+      if (!this._canActivate(rt)) { rt.holding = false; return; }
       this._fireTrigger(rt);
       const span = Math.max(0.1, this._actionsSpan(rt));
       this.scheduled.push({ time: this.simTime + span, run: cycle });
@@ -816,12 +1057,14 @@ export class Engine {
 
   // Starts a self-repeating "boucle infinie" cycle (shared by trigger/button/
   // plate) — fires the action list, waits for it to finish, fires it again,
-  // forever. Guarded by `looping` so re-entering/re-pressing doesn't stack
-  // multiple concurrent cycles.
+  // forever (or until maxRepeats/releaseMode closes it). Guarded by
+  // `looping` so re-entering/re-pressing doesn't stack multiple concurrent
+  // cycles.
   _fireLoop(rt) {
     if (rt.looping) return;
     rt.looping = true;
     const cycle = () => {
+      if (!this._canActivate(rt)) { rt.looping = false; return; }
       this._fireTrigger(rt);
       const span = Math.max(0.1, this._actionsSpan(rt));
       this.scheduled.push({ time: this.simTime + span, run: cycle });
@@ -829,16 +1072,44 @@ export class Engine {
     cycle();
   }
 
+  // Per-action start offsets (seconds, relative to "now"). By default each
+  // action starts independently at its own `delay` (original behavior). With
+  // `props.sequential` on ("Executé les actions dans l'ordre"), actions
+  // instead chain one after another — each one's `delay` becomes an extra
+  // wait added AFTER the previous action finishes playing, rather than being
+  // measured from "now" — so they visibly play out one at a time instead of
+  // several kicking off at once. Shared by both _fireTrigger (scheduling) and
+  // _actionsSpan (duration) so the two can never disagree.
+  _actionOffsets(rt) {
+    const actions = (rt.def.props && rt.def.props.actions) || [];
+    const sequential = !!(rt.def.props && rt.def.props.sequential);
+    const offsets = [];
+    if (!sequential) {
+      for (const a of actions) offsets.push(a.delay || 0);
+      return offsets;
+    }
+    let cursor = 0;
+    for (const a of actions) {
+      cursor += (a.delay || 0);
+      offsets.push(cursor);
+      const dur = a.type === ACTION_TYPES.MOVE_ELEMENT ? Math.max(0.05, a.params.duration || 0.5) : 0;
+      cursor += dur;
+    }
+    return offsets;
+  }
+
   // Total time (seconds, relative to "now") the action list takes to fully
-  // play out — the longest delay+duration among its actions — used to know
-  // when a button becomes pressable again, when to loop/repeat next, and
-  // where to schedule a "revert to start" once actions finish.
+  // play out — used to know when a button becomes pressable again, when to
+  // loop/repeat next, and where to schedule a "revert to start" once actions
+  // finish.
   _actionsSpan(rt) {
     const actions = (rt.def.props && rt.def.props.actions) || [];
+    const offsets = this._actionOffsets(rt);
     let span = 0;
-    for (const a of actions) {
+    for (let i = 0; i < actions.length; i++) {
+      const a = actions[i];
       const dur = a.type === ACTION_TYPES.MOVE_ELEMENT ? Math.max(0.05, a.params.duration || 0.5) : 0;
-      span = Math.max(span, (a.delay || 0) + dur);
+      span = Math.max(span, offsets[i] + dur);
     }
     return span;
   }
@@ -855,21 +1126,58 @@ export class Engine {
   // on inversait le sens du temps" — a moved element goes back to its
   // start, an invisible player becomes visible again, etc — see
   // _runActionReversed), 3rd forward again, and so on.
+  //
+  // Also tracks the extended activation bookkeeping shared by all three
+  // types: bumps `repeatCount` and permanently closes the entity once
+  // `maxRepeats` is reached, permanently closes it once this activation's
+  // actions finish when `releaseMode:'finishAndClose'`, and arms
+  // `cooldownUntil` when `rearmCooldown` is set.
   _fireTrigger(triggerRt) {
+    const props = triggerRt.def.props || {};
     const canReverse = (triggerRt.def.type === ENTITY_TYPES.BUTTON || triggerRt.def.type === ENTITY_TYPES.PLATE)
-      && !!(triggerRt.def.props && triggerRt.def.props.reversible);
+      && !!props.reversible;
     const reversed = canReverse && triggerRt.reversed;
-    const actions = (triggerRt.def.props && triggerRt.def.props.actions) || [];
-    for (const action of actions) {
-      const runAt = this.simTime + (action.delay || 0);
+    const actions = props.actions || [];
+    const offsets = this._actionOffsets(triggerRt);
+    for (let i = 0; i < actions.length; i++) {
+      const action = actions[i];
+      const runAt = this.simTime + offsets[i];
       this.scheduled.push({ time: runAt, run: () => (reversed ? this._runActionReversed(action) : this._runAction(action)) });
     }
     if (canReverse) triggerRt.reversed = !triggerRt.reversed;
+
+    triggerRt.repeatCount = (triggerRt.repeatCount || 0) + 1;
+    const maxRepeats = props.maxRepeats || 0;
+    if (maxRepeats > 0 && triggerRt.repeatCount >= maxRepeats) triggerRt.disabled = true;
+
+    const span = Math.max(0, this._actionsSpan(triggerRt));
+    if (props.releaseMode === 'finishAndClose') {
+      this.scheduled.push({ time: this.simTime + Math.max(0.1, span), run: () => { triggerRt.disabled = true; } });
+    }
+    if (props.rearmCooldown > 0) {
+      triggerRt.cooldownUntil = this.simTime + span + props.rearmCooldown;
+    }
+  }
+
+  // Resolves a TELEPORT action's special 'player' / 'player2' targetId to the
+  // actual runtime player object. 'player2' on a level that doesn't have a
+  // second player (this.player2 is null) falls back to player 1 rather than
+  // crashing — harmless no-op-ish behavior for an action authored while 2
+  // players was on, then later turned back off.
+  _resolveActionPlayer(targetId) {
+    if (targetId === 'player2') return this.player2 || this.player;
+    return this.player;
+  }
+
+  // Resolves a SET_PLAYER_STATE action's `params.player` (1 or 2, default 1
+  // — see constants around "2 joueurs") to the actual runtime player object,
+  // with the same player2-doesn't-exist fallback as above.
+  _resolveStatePlayer(params) {
+    return Number(params.player) === 2 ? (this.player2 || this.player) : this.player;
   }
 
   _runAction(action) {
-    const p = this.player;
-    const target = action.targetId === 'player' ? null : this.runtime.get(action.targetId);
+    const target = (action.targetId === 'player' || action.targetId === 'player2') ? null : this.runtime.get(action.targetId);
     const params = action.params || {};
     switch (action.type) {
       case ACTION_TYPES.MOVE_ELEMENT: {
@@ -887,7 +1195,8 @@ export class Engine {
         break;
       }
       case ACTION_TYPES.TELEPORT: {
-        if (action.targetId === 'player') {
+        if (action.targetId === 'player' || action.targetId === 'player2') {
+          const p = this._resolveActionPlayer(action.targetId);
           p.x = params.x * CELL; p.y = params.y * CELL;
         } else if (target) {
           target.x = params.x * CELL; target.y = params.y * CELL;
@@ -911,6 +1220,7 @@ export class Engine {
         break;
       }
       case ACTION_TYPES.SET_PLAYER_STATE: {
+        const p = this._resolveStatePlayer(params);
         if ('gravity' in params) p.gravityDir = params.gravity;
         if ('invert' in params) {
           const axis = params.invert;
@@ -924,7 +1234,7 @@ export class Engine {
             }, dur * 1000);
           }
         }
-        if ('invisible' in params) this._setPlayerInvisible(!!params.invisible);
+        if ('invisible' in params) this._setPlayerInvisible(!!params.invisible, p);
         if ('jumpMult' in params) {
           p.jumpMult = params.jumpMult;
           const dur = params.statDuration || 0;
@@ -948,8 +1258,7 @@ export class Engine {
   // boolean flags return to their authored defaults. Never used for
   // TRIGGER, which always plays forward.
   _runActionReversed(action) {
-    const p = this.player;
-    const target = action.targetId === 'player' ? null : this.runtime.get(action.targetId);
+    const target = (action.targetId === 'player' || action.targetId === 'player2') ? null : this.runtime.get(action.targetId);
     const params = action.params || {};
     switch (action.type) {
       case ACTION_TYPES.MOVE_ELEMENT: {
@@ -963,8 +1272,17 @@ export class Engine {
         break;
       }
       case ACTION_TYPES.TELEPORT: {
-        if (action.targetId === 'player') {
-          p.x = this.respawn.x * CELL; p.y = this.respawn.y * CELL;
+        if (action.targetId === 'player' || action.targetId === 'player2') {
+          const p = this._resolveActionPlayer(action.targetId);
+          // player 2's own respawn point is always player 1's respawn anchor
+          // offset by their authored spawn-to-spawn delta — see _resetPlayer.
+          if (action.targetId === 'player2' && this.player2) {
+            const lvl = this.level;
+            const dx = (lvl.playerStart2.x - lvl.playerStart.x), dy = (lvl.playerStart2.y - lvl.playerStart.y);
+            p.x = (this.respawn.x + dx) * CELL; p.y = (this.respawn.y + dy) * CELL;
+          } else {
+            p.x = this.respawn.x * CELL; p.y = this.respawn.y * CELL;
+          }
         } else if (target) {
           target.x = target.def.x * CELL; target.y = target.def.y * CELL;
           target.anim = null;
@@ -987,14 +1305,15 @@ export class Engine {
         break;
       }
       case ACTION_TYPES.SET_PLAYER_STATE: {
-        const ps = this.level.playerStart || {};
+        const p = this._resolveStatePlayer(params);
+        const ps = (Number(params.player) === 2 ? this.level.playerStart2 : this.level.playerStart) || {};
         if ('gravity' in params) p.gravityDir = ps.gravityDir || 'down';
         if ('invert' in params) {
           const axis = params.invert;
           if (axis === 'both') { p.invert.horizontal = false; p.invert.vertical = false; }
           else p.invert[axis] = false;
         }
-        if ('invisible' in params) this._setPlayerInvisible(!!ps.invisible);
+        if ('invisible' in params) this._setPlayerInvisible(!!ps.invisible, p);
         if ('jumpMult' in params) p.jumpMult = 1;
         if ('speedMult' in params) p.speedMult = 1;
         break;
@@ -1007,8 +1326,7 @@ export class Engine {
   // right at the moment it changes, so it reads as a deliberate effect
   // rather than the player silently popping in/out. No-ops if the value
   // doesn't actually change (e.g. an action re-setting invisible:true twice).
-  _setPlayerInvisible(value) {
-    const p = this.player;
+  _setPlayerInvisible(value, p = this.player) {
     if (p.invisible === value) return;
     p.invisible = value;
     const cx = p.x + p.w / 2, cy = p.y + p.h / 2;
@@ -1020,11 +1338,14 @@ export class Engine {
     const cv = this.canvas;
     const lvl = this.level;
     const levelW = lvl.cols * CELL, levelH = lvl.rows * CELL;
-    // The player always sits dead-center of the viewport (not offset ahead
-    // of them) — the only thing that ever moves the camera off-center is the
-    // clamp against the level's edges below.
-    let cx = this.player.x + this.player.w / 2 - cv.width / 2;
-    let cy = this.player.y + this.player.h / 2 - cv.height / 2;
+    // The midpoint of all active players sits dead-center of the viewport
+    // (just the one player in a single-player level — the average of one
+    // point is itself) — the only thing that ever moves the camera
+    // off-center is the clamp against the level's edges below.
+    const midX = this.players.reduce((s, p) => s + p.x + p.w / 2, 0) / this.players.length;
+    const midY = this.players.reduce((s, p) => s + p.y + p.h / 2, 0) / this.players.length;
+    let cx = midX - cv.width / 2;
+    let cy = midY - cv.height / 2;
     cx = Math.max(0, Math.min(cx, Math.max(0, levelW - cv.width)));
     cy = Math.max(0, Math.min(cy, Math.max(0, levelH - cv.height)));
     this.camera.x = cx; this.camera.y = cy;
@@ -1064,16 +1385,17 @@ export class Engine {
     // seamless mass with no visible seam between them.
     this._blockCells = this._buildBlockCellSet();
 
-    // Entities can be assigned a purely cosmetic paint-order layer (see
-    // constants.js's LAYERS) so a level author can tuck decoration behind
-    // blocks or float something in front of the player — collision/hazards/
-    // scripting are completely untouched by this, only draw order changes.
+    // Entities can be assigned a purely cosmetic paint-order layer (a free
+    // integer, see constants.js's clampLayer) so a level author can tuck
+    // decoration behind blocks or float something in front of the player —
+    // collision/hazards/scripting are completely untouched by this, only
+    // draw order changes.
     // A stable sort keeps every layer-0 entity in its original relative
     // order (matching the pre-layers single-pass draw exactly), and splits
     // around the player so layer<=0 draws behind them, layer>0 in front.
     const sorted = Array.from(this.runtime.values()).sort((a, b) => (a.def.layer || 0) - (b.def.layer || 0));
     for (const rt of sorted) { if ((rt.def.layer || 0) <= 0) this._renderEntity(rt); }
-    this._renderPlayer();
+    for (const p of this.players) this._renderPlayer(p);
     for (const rt of sorted) { if ((rt.def.layer || 0) > 0) this._renderEntity(rt); }
     this.particles.render(ctx);
 
@@ -1084,8 +1406,14 @@ export class Engine {
     const set = new Set();
     for (const rt of this.runtime.values()) {
       if (rt.def.type !== ENTITY_TYPES.BLOCK) continue;
+      // Keyed off the block's CURRENT (runtime) position, not its authored
+      // one — a block can now be moved by an action (see constants.js's note
+      // on the retired PLATFORM type), and the seamless-merge highlight/
+      // shadow needs to reflect whatever it's actually next to right now,
+      // not what it happened to start next to.
+      const cellX = Math.round(rt.x / CELL), cellY = Math.round(rt.y / CELL);
       for (let i = 0; i < rt.def.w; i++) {
-        for (let j = 0; j < rt.def.h; j++) set.add(`${rt.def.x + i},${rt.def.y + j}`);
+        for (let j = 0; j < rt.def.h; j++) set.add(`${cellX + i},${cellY + j}`);
       }
     }
     return set;
@@ -1112,9 +1440,10 @@ export class Engine {
         // shadow strips and outline below, which only ever appear on a
         // cell's genuinely exposed (non-adjacent) edges, in any direction.
         const cells = this._blockCells;
+        const cellX = Math.round(rt.x / CELL), cellY = Math.round(rt.y / CELL);
         for (let i = 0; i < rt.def.w; i++) {
           for (let j = 0; j < rt.def.h; j++) {
-            const cx = rt.def.x + i, cy = rt.def.y + j;
+            const cx = cellX + i, cy = cellY + j;
             const px = rt.x + i * CELL, py = rt.y + j * CELL;
             const hasUp = cells.has(`${cx},${cy - 1}`);
             const hasDown = cells.has(`${cx},${cy + 1}`);
@@ -1134,37 +1463,6 @@ export class Engine {
             if (!hasRight) { ctx.moveTo(px + CELL - 0.5, py); ctx.lineTo(px + CELL - 0.5, py + CELL); }
             ctx.stroke();
           }
-        }
-        break;
-      }
-      case ENTITY_TYPES.PLATFORM: {
-        const pprops = rt.def.props || {};
-        if (pprops.style === 'block') {
-          // Same flat fill + edge highlight/shadow treatment as a solid
-          // BLOCK cell (see above), just applied once to the platform's own
-          // rectangle — it's a standalone moving piece, not blended into a
-          // wider seamless mass, so every edge always gets the treatment.
-          ctx.fillStyle = '#181a26';
-          ctx.fillRect(rt.x, rt.y, w, h);
-          ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(rt.x, rt.y, w, 3);
-          ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(rt.x, rt.y + h - 3, w, 3);
-          ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect(rt.x, rt.y, 3, h);
-          ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(rt.x + w - 3, rt.y, 3, h);
-          ctx.strokeStyle = 'rgba(255,255,255,0.06)'; ctx.lineWidth = 1;
-          ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
-        } else {
-          const custom = pprops.color;
-          const c0 = custom ? shadeColor(custom, 25) : '#5b93ee';
-          const c1 = custom || '#2d6cdf';
-          const c2 = custom ? shadeColor(custom, -35) : '#1a4bb0';
-          const grad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
-          grad.addColorStop(0, c0); grad.addColorStop(0.5, c1); grad.addColorStop(1, c2);
-          ctx.fillStyle = grad; ctx.fillRect(rt.x, rt.y, w, h);
-          ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(rt.x, rt.y, w, 3);
-          ctx.strokeStyle = 'rgba(0,0,0,0.3)'; ctx.strokeRect(rt.x + 0.5, rt.y + 0.5, w - 1, h - 1);
-          // plank seams
-          ctx.strokeStyle = 'rgba(0,0,0,0.2)';
-          for (let i = 1; i < rt.def.w; i++) { ctx.beginPath(); ctx.moveTo(rt.x + i * CELL, rt.y + 2); ctx.lineTo(rt.x + i * CELL, rt.y + h - 2); ctx.stroke(); }
         }
         break;
       }
@@ -1459,6 +1757,13 @@ export class Engine {
         // A button is deliberately visible (unlike a trigger) so the player
         // can tell it's there and understand it can be pressed again once
         // its actions have finished playing.
+        // Purely cosmetic facing rotation (see _facingAngle) — the
+        // activation area stays the full cell, overlap-based, unaffected.
+        const facingAngle = this._facingAngle(rt.def.props && rt.def.props.facing);
+        if (facingAngle) {
+          const bcx = rt.x + w / 2, bcy = rt.y + h / 2;
+          ctx.translate(bcx, bcy); ctx.rotate(facingAngle); ctx.translate(-bcx, -bcy);
+        }
         const cooling = !rt.buttonReady;
         const housingGrad = ctx.createLinearGradient(rt.x, rt.y, rt.x, rt.y + h);
         housingGrad.addColorStop(0, '#383c52'); housingGrad.addColorStop(1, '#22242f');
@@ -1477,6 +1782,13 @@ export class Engine {
       case ENTITY_TYPES.PLATE: {
         // A pressure plate sits flush and low, and visibly compresses while
         // the player is standing on it (rt.holding / rt.looping).
+        // Purely cosmetic facing rotation (see _facingAngle) — the
+        // activation area stays the full cell, overlap-based, unaffected.
+        const plateFacingAngle = this._facingAngle(rt.def.props && rt.def.props.facing);
+        if (plateFacingAngle) {
+          const pcx = rt.x + w / 2, pcy = rt.y + h / 2;
+          ctx.translate(pcx, pcy); ctx.rotate(plateFacingAngle); ctx.translate(-pcx, -pcy);
+        }
         const pressed = rt.holding || rt.looping;
         const plateH = pressed ? h * 0.18 : h * 0.28;
         const grad = ctx.createLinearGradient(rt.x, rt.y + h - plateH, rt.x, rt.y + h);
@@ -1494,16 +1806,21 @@ export class Engine {
     ctx.restore();
   }
 
-  _renderPlayer() {
-    if ((this.player.invisible || this._hidePlayerForDoor) && !this.debugTriggers) return;
-    const ctx = this.ctx, p = this.player;
+  // `p` defaults to player 1; player 2 (see this.players/reset) gets a
+  // distinct blue palette instead of orange so the two are never confused at
+  // a glance — everything else about the sprite (shape, rotation, face) is
+  // identical between them.
+  _renderPlayer(p = this.player) {
+    if ((p.invisible || this._hidePlayerForDoor) && !this.debugTriggers) return;
+    const ctx = this.ctx;
+    const isP2 = p === this.player2;
     ctx.save();
     // Rotate the whole sprite around its own center so its "feet" always
     // face the current gravity direction — upside-down when gravity is
     // flipped, sideways when walking on a side wall. Inverted controls
     // (troll) are a pure gameplay effect now: no recolor, no mouth swap —
     // there is nothing to see, on purpose.
-    const angle = { down: 0, up: Math.PI, left: Math.PI / 2, right: -Math.PI / 2 }[p.gravityDir] || 0;
+    const angle = { down: 0, up: Math.PI, left: Math.PI / 2, right: -Math.PI / 2 }[this._effectiveGravityDir(p.gravityDir)] || 0;
     ctx.translate(p.x + p.w / 2, p.y + p.h / 2);
     ctx.rotate(angle);
     ctx.translate(-p.w / 2, -p.h / 2);
@@ -1517,8 +1834,8 @@ export class Engine {
     ctx.fill();
 
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0, '#f77f00');
-    grad.addColorStop(1, '#d1600a');
+    if (isP2) { grad.addColorStop(0, '#2ec4ff'); grad.addColorStop(1, '#0d7fb8'); }
+    else { grad.addColorStop(0, '#f77f00'); grad.addColorStop(1, '#d1600a'); }
     ctx.fillStyle = grad;
     roundRect(ctx, 0, 0, w, h, w * 0.28);
     ctx.fill();
@@ -1560,17 +1877,6 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
-}
-
-// Lightens (positive percent) or darkens (negative) a "#rrggbb" color —
-// used to derive a platform's highlight/shadow gradient stops from a single
-// author-picked base color.
-function shadeColor(hex, percent) {
-  const n = parseInt(hex.replace('#', ''), 16);
-  const amt = Math.round(2.55 * percent);
-  let r = (n >> 16) + amt, g = (n >> 8 & 0x00ff) + amt, b = (n & 0x0000ff) + amt;
-  r = Math.max(0, Math.min(255, r)); g = Math.max(0, Math.min(255, g)); b = Math.max(0, Math.min(255, b));
-  return `#${(1 << 24 | r << 16 | g << 8 | b).toString(16).slice(1)}`;
 }
 
 // Draws a row (or column, for left/right-facing) of triangular spikes so the

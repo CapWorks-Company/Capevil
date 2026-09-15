@@ -44,7 +44,9 @@ export function buildSampleLevel() {
   add(ENTITY_TYPES.BLOCK, 15, 11, { invisible: true });
 
   // --- Plateforme mobile qui traverse la fosse --------------------------
-  const platform = add(ENTITY_TYPES.PLATFORM, 17, 9, { w: 2 });
+  // Un simple bloc solide déplacé par des actions : n'importe quel bloc peut
+  // servir de plateforme mobile, plus besoin d'un type d'élément séparé.
+  const platform = add(ENTITY_TYPES.BLOCK, 17, 9, { w: 2 });
   add(ENTITY_TYPES.TRIGGER, 16, 12, {
     props: {
       actions: [
@@ -91,7 +93,7 @@ export function buildSampleLevel() {
 
   // Plateforme qui boucle toute seule : monte, redescend, et recommence — la
   // case "Boucle infinie" du trigger se charge de tout relancer elle-même.
-  const loopPlat = add(ENTITY_TYPES.PLATFORM, 41, 11);
+  const loopPlat = add(ENTITY_TYPES.BLOCK, 41, 11);
   add(ENTITY_TYPES.TRIGGER, 40, 12, {
     props: {
       loop: true,

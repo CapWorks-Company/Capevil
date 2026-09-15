@@ -161,6 +161,102 @@ canvas#stage {
 @media (max-width: 900px) {
   .editor-layout { grid-template-columns: 1fr; }
 }
+.editor-center { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.editor-left { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+
+/* Layers panel: one row per distinct `layer` value in use, with an eye
+   toggle to hide it from the canvas while editing (view-only — never saved,
+   never affects the actual level). Sits under the tool palette, on the
+   editor's left side. */
+#layers-panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 10px 12px; max-height: 240px; overflow-y: auto; box-shadow: var(--shadow);
+}
+#layers-panel h3 { margin: 0 0 8px; font-size: 13px; }
+.layer-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 9px; margin-bottom: 5px; cursor: pointer; color: var(--text); font-size: 12.5px;
+  text-align: left; transition: background .12s ease, border-color .12s ease, opacity .12s ease;
+}
+.layer-row:last-child { margin-bottom: 0; }
+.layer-row:hover { background: var(--panel-3); }
+.layer-row.layer-hidden { opacity: 0.55; }
+.layer-eye { flex-shrink: 0; font-size: 13px; }
+.layer-row .llabel { flex: 1; }
+.layer-row .lcount {
+  color: var(--muted); font-size: 11px; background: var(--panel-3);
+  border-radius: 999px; padding: 1px 7px; flex-shrink: 0;
+}
+
+/* Entity hierarchy / outliner: every placed entity (plus the player spawn),
+   front-to-back, so an author can find and select something without having
+   to spot it on a crowded grid — especially once several entities overlap
+   or share a layer. Click a row to select it, exactly like clicking it on
+   the canvas would. */
+#hierarchy {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 10px 12px; max-height: 220px; overflow-y: auto; box-shadow: var(--shadow);
+}
+#hierarchy .section-title { margin-bottom: 6px; }
+.hierarchy-row {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 9px; margin-bottom: 5px; cursor: pointer; color: var(--text); font-size: 12.5px;
+  text-align: left; transition: background .12s ease, border-color .12s ease;
+}
+.hierarchy-row:last-child { margin-bottom: 0; }
+.hierarchy-row:hover { background: var(--panel-3); }
+.hierarchy-row.active {
+  border-color: var(--accent); background: linear-gradient(135deg, #3a2c14 0%, #2c2414 100%);
+  box-shadow: inset 0 0 0 1px rgba(247,127,0,0.35);
+}
+/* Entity sits on a layer currently hidden via the layers panel — still
+   listed and still selectable here (that's the whole point: find it even
+   while it's invisible on the canvas), just visually dimmed as a hint. */
+.hierarchy-row.hrow-hidden { opacity: 0.5; }
+.hierarchy-row .hswatch {
+  width: 18px; height: 18px; border-radius: 5px; flex-shrink: 0; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(255,255,255,0.18);
+}
+.hierarchy-row .hlabel { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hierarchy-row .hlayer { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+#hierarchy .muted.empty { font-size: 12px; margin: 2px 0; }
+
+/* Toggle between the Hiérarchie (outliner) and Actions (Scratch-like block
+   assembly) panels — they share the same slot below the canvas, one at a
+   time, so switching to Actions doesn't shrink the grid view. */
+#bottom-tabs { display: flex; gap: 6px; }
+#bottom-tabs .btn.active {
+  border-color: var(--accent); background: linear-gradient(135deg, #3a2c14 0%, #2c2414 100%);
+  box-shadow: inset 0 0 0 1px rgba(247,127,0,0.35);
+}
+
+/* Actions panel: the same "Accéder aux blocs" cards as before, but given the
+   whole bottom slot (in place of the Hiérarchie) so there's real room to lay
+   them out and drag them into a new order — see editor.js's
+   renderActionsPanel/bindActionsPanel. */
+#actions-panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+  padding: 12px 14px; max-height: min(640px, 65vh); overflow-y: auto; box-shadow: var(--shadow);
+}
+.actions-panel-header {
+  display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
+}
+.actions-panel-header .spacer { flex: 1; }
+/* A single vertical column, not a wrapping grid — the actions are an
+   ORDERED list (they can fire in sequence), so keeping one column makes
+   "drop above/below this card" (see .drop-before/.drop-after) unambiguous,
+   the way it wouldn't be if two cards could sit side by side. */
+#actions-panel-list {
+  display: flex; flex-direction: column; gap: 12px; max-width: 560px;
+}
+.action-block-slot { transition: opacity .12s ease; user-select: none; }
+.action-block-slot.dragging { opacity: 0.4; }
+.action-block-slot.drop-before { box-shadow: 0 -3px 0 0 var(--accent) inset; }
+.action-block-slot.drop-after { box-shadow: 0 3px 0 0 var(--accent) inset; }
+.action-block-slot .action-block { margin-bottom: 0; }
 .palette-btn {
   display: flex; align-items: center; gap: 10px; width: 100%;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
@@ -179,10 +275,17 @@ canvas#stage {
 }
 .toolbox-sep { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
 
-.props-panel label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
-.props-panel .row { display: flex; gap: 6px; }
-.props-panel .row > * { flex: 1; }
+.props-panel label, .field-group label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .4px; }
+.props-panel .row, .field-group .row { display: flex; gap: 6px; }
+.props-panel .row > *, .field-group .row > * { flex: 1; }
 .props-panel > label:first-of-type { margin-top: 0; }
+/* Selects/inputs directly inside a field-group card (as opposed to the
+   .row-paired ones in the top position/size fields) should always take the
+   full card width — otherwise a short option list (e.g. "Caisse uniquement")
+   leaves enough room on the same line for the FOLLOWING label to flow up
+   beside it instead of dropping to its own row, since select/input default
+   to inline-block. */
+.field-group > select, .field-group > input[type="number"] { display: block; width: 100%; }
 
 /* A short, muted explanatory line under a field or a whole section — used
    everywhere in place of ad hoc <p class="muted" style="..."> so every hint
@@ -243,6 +346,48 @@ canvas#stage {
 .action-item .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; gap: 8px; }
 .action-item .head select { flex: 1; }
 .action-item label:first-of-type { margin-top: 4px; }
+
+/* "Accéder aux blocs" — a Scratch-like alternate view of the same actions,
+   read as natural-language sentences with small inline editable pieces
+   instead of a stacked form. Purely a display mode (see editor.js's
+   blockViewIds/renderActionBlock): the underlying action data and all of its
+   bindings (data-f, data-pick-target…) are identical to the list view. */
+.action-block {
+  border: 1px solid var(--block-color, var(--border)); border-radius: 12px;
+  padding: 0; margin-bottom: 12px; background: var(--panel-2);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  overflow: hidden;
+}
+.action-block .block-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: color-mix(in srgb, var(--block-color, var(--border)) 20%, var(--panel-2));
+  border-bottom: 1px solid var(--block-color, var(--border));
+}
+.action-block .block-emoji { font-size: 15px; }
+.block-drag-handle {
+  cursor: grab; color: var(--muted); font-size: 15px; line-height: 1;
+  padding: 2px 2px; margin-right: -2px; flex-shrink: 0;
+}
+.block-drag-handle:active { cursor: grabbing; }
+.action-block .block-head select { flex: 0 1 auto; min-width: 0; }
+.action-block .block-spacer { flex: 1; }
+.action-block .block-delay { display: flex !important; align-items: center; gap: 6px; margin: 0 !important; font-size: 11.5px; color: var(--muted); text-transform: none !important; font-weight: 400 !important; white-space: nowrap; }
+.action-block .block-body { padding: 10px 12px 12px; }
+.block-sentence {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  font-size: 13px; line-height: 1.6;
+}
+.block-sentence + .block-sentence { margin-top: 8px; }
+.block-chip {
+  display: inline-flex; align-items: center; background: var(--panel-3);
+  border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px;
+  font-size: 12.5px; font-weight: 600;
+}
+.block-input {
+  width: 64px; text-align: center; padding: 5px 6px !important;
+}
+.block-input.small { width: 52px; }
+.actions-block-view .action-item label:first-of-type { margin-top: 0; }
 
 .props-header {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
