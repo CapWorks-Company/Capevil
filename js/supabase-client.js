@@ -272,12 +272,29 @@ export async function setLevelApproved(id, approved) {
 }
 
 // ---------------------------------------------------------------- reports
-// Only approved (official) levels can be reported — see sql/schema.sql.
+// Only approved (official) levels can be reported — see sql/schema.sql. Open
+// to any signed-in account, not just the level's own creator (same logic as
+// likes) — but capped at one report per account per level, enforced by the
+// database's unique constraint; report_level() ignores a repeat call rather
+// than erroring, and returns whether this call actually registered a new
+// report (false means "you'd already reported this one").
 export async function reportLevel(id, reason) {
   const client = await getClient();
   if (!client) return { error: 'not_configured' };
-  const { error } = await client.rpc('report_level', { level_id: id, reason: reason || '' });
-  return { error };
+  const { data, error } = await client.rpc('report_level', { level_id: id, reason: reason || '' });
+  return { error, reported: !!data };
+}
+
+// Whether the signed-in account has already reported this level. Always
+// false when signed out (no account to have reported with).
+export async function hasReportedLevel(id) {
+  const client = await getClient();
+  if (!client) return false;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return false;
+  const { data, error } = await client.rpc('has_reported_level', { p_level_id: id });
+  if (error) return false;
+  return !!data;
 }
 
 export async function listReports() {

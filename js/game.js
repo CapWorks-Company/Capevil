@@ -1,7 +1,7 @@
 import { Engine } from './engine.js';
 import { buildSampleLevel } from './sample-level.js';
 import { deserializeLevel, createEmptyLevel } from './level-model.js';
-import { getLevel, recordPlay, recordWin, likeLevel, hasLikedLevel, reportLevel, isBackendReady } from './supabase-client.js';
+import { getLevel, recordPlay, recordWin, likeLevel, hasLikedLevel, reportLevel, hasReportedLevel, isBackendReady } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
 import { showToast, promptModal } from './ui-kit.js';
@@ -25,15 +25,62 @@ const loadError = document.getElementById('load-error');
 const accountBarEl = document.getElementById('account-bar');
 
 // The canvas is sized to exactly match the level's own grid (cols/rows *
-// CELL) — no empty letterboxed space around a small level — capped at
-// GAME_VIEWPORT_MAX for a big one (beyond that the camera scrolls/follows
-// the player instead of shrinking the world; see engine.js's
-// _updateCamera). A narrow browser window still scales the whole canvas
-// down visually via the `max-width:100%` CSS rule on #stage, without
-// touching this buffer size or the gameplay coordinate space at all.
+// CELL) — no empty letterboxed space around a small level — but never
+// bigger than what the browser window actually has room for RIGHT NOW
+// (measured live below), so the level's own grid size is never the reason
+// the page needs scrolling. GAME_VIEWPORT_MAX (constants.js) is only the
+// hard ceiling on top of that — past either limit the camera scrolls/
+// follows the player instead of shrinking the world (see engine.js's
+// _updateCamera).
+//
+// A 2-player level stacks two viewports vertically (player 1 on top, player
+// 2 below — see engine.js's render/_updateCamera split): the available
+// height is split between the two up front, so the whole stack still fits
+// on screen instead of capping each one on its own and doubling past
+// whatever room the window actually had.
+function availableStageSize() {
+  // Measured, not guessed: rather than hand-tallying every margin/padding
+  // around the canvas (the keybind hint line's own default <p> margin, the
+  // stage-wrap's padding, borders, …), collapse the canvas to ~0 for one
+  // synchronous instant and see where the last element after it (the
+  // keybind hint line) actually ends up — that bottom edge is exactly how
+  // much vertical space everything BUT the canvas takes, correctly, even if
+  // the surrounding layout changes later. No paint happens in between
+  // (nothing here awaits), so this never flashes on screen.
+  //
+  // document.documentElement.scrollHeight can't be used for this — it's
+  // clamped to be at least the viewport's own height, so it stays stuck at
+  // window.innerHeight (not the true, smaller content height) whenever the
+  // collapsed page is shorter than the window, which is exactly the normal
+  // case here.
+  const hint = document.querySelector('.keys-hint');
+  const prevW = canvas.style.width, prevH = canvas.style.height;
+  canvas.style.width = '0px';
+  canvas.style.height = '0px';
+  const chromeHeight = hint ? hint.getBoundingClientRect().bottom : 250;
+  canvas.style.width = prevW;
+  canvas.style.height = prevH;
+  // Extra safety margin on top of the measured chrome height: the topbar's
+  // nav row can wrap onto more lines once a vertical scrollbar shows up
+  // (narrower available width), which only happens once the canvas grows —
+  // a small chicken-and-egg the exact measurement above can't see coming.
+  // Reserving a bit more than measured avoids that feedback loop tipping
+  // the page into scrolling by a few px on a narrow window.
+  return {
+    w: Math.max(320, window.innerWidth - 32),
+    h: Math.max(240, window.innerHeight - chromeHeight - 40),
+  };
+}
+
 function sizeCanvasToLevel(level) {
-  canvas.width = Math.min(level.cols * CELL, GAME_VIEWPORT_MAX.w);
-  canvas.height = Math.min(level.rows * CELL, GAME_VIEWPORT_MAX.h);
+  const avail = availableStageSize();
+  const isSplit = !!level.playerStart2;
+  const capW = Math.min(GAME_VIEWPORT_MAX.w, avail.w);
+  const capH = Math.min(GAME_VIEWPORT_MAX.h, isSplit ? Math.floor(avail.h / 2) : avail.h);
+  const w = Math.min(level.cols * CELL, capW);
+  const hPerPlayer = Math.min(level.rows * CELL, capH);
+  canvas.width = w;
+  canvas.height = isSplit ? hPerPlayer * 2 : hPerPlayer;
 }
 
 const params = new URLSearchParams(location.search);
@@ -47,8 +94,9 @@ let campaignLevels = null; // set by loadLevel() once discovery resolves — onW
 
 let engine = null;
 let session = null;
+let loadedLevel = null; // set once loadLevel() resolves — lets the resize handler re-fit the canvas later
 
-isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; refreshLikeButtonState(); } }); });
+isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; refreshLikeButtonState(); refreshReportButtonState(); } }); });
 
 // A like is capped at one per account — grey the button out (without
 // touching the count span inside it) once this account has already liked
@@ -58,6 +106,16 @@ async function refreshLikeButtonState() {
   const liked = await hasLikedLevel(remoteId);
   likeBtn.disabled = liked;
   likeBtn.title = liked ? 'Tu as déjà liké ce niveau.' : '';
+}
+
+// Same one-per-account cap as likes — grey the report button out once this
+// account has already reported the level currently loaded.
+async function refreshReportButtonState() {
+  if (!remoteId) return;
+  const reported = await hasReportedLevel(remoteId);
+  if (reported) reportBtn.textContent = '🚩 Signalé ✓';
+  reportBtn.disabled = reported;
+  reportBtn.title = reported ? 'Tu as déjà signalé ce niveau.' : '';
 }
 mountKeybindButton(document.getElementById('keybind-bar'));
 mountAudioButton(document.getElementById('audio-bar'));
@@ -70,7 +128,7 @@ async function loadLevel() {
       likeCountEl.textContent = likes ?? 0;
       likeBtn.classList.remove('hidden');
       refreshLikeButtonState();
-      if (approved) { officialBadge.classList.remove('hidden'); reportBtn.classList.remove('hidden'); }
+      if (approved) { officialBadge.classList.remove('hidden'); reportBtn.classList.remove('hidden'); refreshReportButtonState(); }
       return level;
     } catch (err) {
       loadError.textContent = "Impossible de charger ce niveau (Supabase non configuré ou niveau introuvable).";
@@ -119,14 +177,17 @@ reportBtn.addEventListener('click', async () => {
   });
   if (reason === null) return;
   reportBtn.disabled = true;
-  const { error } = await reportLevel(remoteId, reason);
+  const { error, reported } = await reportLevel(remoteId, reason);
   reportBtn.textContent = error ? '🚩 Erreur' : '🚩 Signalé ✓';
-  showToast(error ? "Erreur lors de l'envoi du signalement." : 'Signalement envoyé, merci !', { type: error ? 'error' : 'success' });
+  if (error) showToast("Erreur lors de l'envoi du signalement.", { type: 'error' });
+  else showToast(reported ? 'Signalement envoyé, merci !' : 'Tu avais déjà signalé ce niveau.', { type: 'success' });
+  await refreshReportButtonState(); // stays disabled once reported; re-enables only on a genuine failure
 });
 
 loadLevel().then((level) => {
   titleEl.textContent = level.title || 'Niveau';
   authorEl.textContent = level.author ? `par ${level.author}` : '';
+  loadedLevel = level;
   sizeCanvasToLevel(level);
 
   engine = new Engine(canvas, level, {
@@ -152,6 +213,11 @@ loadLevel().then((level) => {
   engine.start();
   window.__engine = engine; // handy for debugging / automated testing from the console
 });
+
+// Re-fit if the window is resized after load (rotating a tablet, resizing a
+// desktop window, …) — canvas.width/height can be changed freely mid-game,
+// Engine just reads them fresh every frame (see render/_updateCamera).
+window.addEventListener('resize', () => { if (loadedLevel) sizeCanvasToLevel(loadedLevel); });
 
 document.getElementById('restart-btn').addEventListener('click', () => engine && engine.reset());
 document.getElementById('win-restart').addEventListener('click', () => {

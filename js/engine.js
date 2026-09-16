@@ -1412,15 +1412,16 @@ export class Engine {
   _updateCamera() {
     const cv = this.canvas;
     if (this.player2) {
-      // Split-screen: each player gets their own half of the canvas and
-      // their own camera, centered/clamped exactly like the single-player
-      // case but against that half's own width. Nothing stops the other
-      // player from being visible too, in whichever half their own position
-      // happens to land in — same as any camera, it just draws whatever's
-      // in range.
-      const halfW = Math.floor(cv.width / 2);
-      this.camera1 = this._computeCameraFor([this.player], halfW, cv.height);
-      this.camera2 = this._computeCameraFor([this.player2], cv.width - halfW, cv.height);
+      // Split-screen: player 1 on top, player 2 below (game.js's
+      // sizeCanvasToLevel doubles the canvas height for a 2-player level, so
+      // each half is a full-size viewport — the same size a single-player
+      // view would get — not two smaller halves of one shared canvas).
+      // Nothing stops the other player from being visible too, in whichever
+      // half their own position happens to land in — same as any camera, it
+      // just draws whatever's in range.
+      const halfH = Math.floor(cv.height / 2);
+      this.camera1 = this._computeCameraFor([this.player], cv.width, halfH);
+      this.camera2 = this._computeCameraFor([this.player2], cv.width, cv.height - halfH);
       this.camera = this.camera1; // keep the single-camera field in sync for any other reader
     } else {
       this.camera = this._computeCameraFor(this.players, cv.width, cv.height);
@@ -1436,13 +1437,13 @@ export class Engine {
     // blocks render as one seamless mass with no visible seam between them.
     this._blockCells = this._buildBlockCellSet();
     if (this.player2) {
-      const halfW = Math.floor(cv.width / 2);
-      this._renderViewport(this.camera1, 0, 0, halfW, cv.height);
-      this._renderViewport(this.camera2, halfW, 0, cv.width - halfW, cv.height);
+      const halfH = Math.floor(cv.height / 2);
+      this._renderViewport(this.camera1, 0, 0, cv.width, halfH);
+      this._renderViewport(this.camera2, 0, halfH, cv.width, cv.height - halfH);
       ctx.save();
       ctx.strokeStyle = 'rgba(255,255,255,0.18)';
       ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(halfW + 0.5, 0); ctx.lineTo(halfW + 0.5, cv.height); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, halfH + 0.5); ctx.lineTo(cv.width, halfH + 0.5); ctx.stroke();
       ctx.restore();
     } else {
       this._renderViewport(this.camera, 0, 0, cv.width, cv.height);

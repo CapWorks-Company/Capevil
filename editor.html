@@ -10,7 +10,7 @@
   #stage-scroll { overflow: auto; max-height: 82vh; border: 1px solid var(--border); border-radius: 8px; background: #000; }
   /* The editor grid must render at exact 1-cell-per-40px, never squished by
      the shared canvas{max-width:100%} rule — large levels scroll instead. */
-  #stage-scroll canvas#stage { max-width: none; width: auto; height: auto; display: block; }
+  #stage-scroll canvas#stage { max-width: none; max-height: none; width: auto; height: auto; display: block; }
 </style>
 </head>
 <body>

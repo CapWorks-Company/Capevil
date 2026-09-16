@@ -10,7 +10,7 @@
 <body>
   <script src="js/mobile-guard.js"></script>
   <div class="topbar">
-    <h1><span>Cap</span>evil — Panel administrateur</h1>
+    <h1><span>Cap</span>evil — Admin</h1>
     <nav>
       <a class="btn small" href="index.html">&larr; Accueil</a>
     </nav>
@@ -18,35 +18,44 @@
 
   <div class="container narrow">
     <div id="backend-warning" class="card card-danger hidden">
-      ⚠️ La base de données a eu un problème. Merci de réessayer ultérieurement !
+      ⚠️ La base de données Supabase n'est pas encore configurée (voir <code>js/config.js</code>).
     </div>
 
     <div id="login-card" class="card">
       <h2>Connexion admin</h2>
       <p class="muted">
-        Les comptes joueurs ne peuvent pas accédé au panel admin 🚫. Merci de votre compréhension.
+        Les comptes joueurs se créent librement depuis la page d'accueil, mais le statut
+        <strong>admin</strong> ne se donne pas tout seul : après avoir créé (ou choisi) un
+        compte, le propriétaire du site l'élève une seule fois en admin directement dans
+        <strong>Supabase Dashboard → SQL Editor</strong> avec :
       </p>
+      <pre class="code-block">update public.profiles set is_admin = true
+where id = (select id from auth.users where email = 'ton-email@exemple.com');</pre>
+      <p class="muted">Connecte-toi ci-dessous avec ce compte pour approuver des niveaux et gérer les signalements.</p>
+      <div id="account-bar"></div>
+      <p id="login-error" class="muted text-danger"></p>
     </div>
 
     <div id="not-admin-card" class="card hidden" style="border-color:var(--danger);">
-      Ce compte est connecté en tant que joueur. Impossible d'accédé au panel admin 🚫.
+      Ce compte est connecté mais n'a pas le statut admin (voir l'explication ci-dessus).
     </div>
 
     <div id="admin-panel" class="card hidden">
-      <h2>-- Demandes d'approbation 📜 --</h2>
+      <h2>Demandes d'approbation en attente</h2>
       <p class="muted">
-        Toutes les demandes d'approbation en cours 📄
+        Accepter une partie l'affiche dans « Parties officielles » sur la page d'accueil,
+        avec la description « Ce niveau à été approuvé par un admin. ».
       </p>
       <div id="pending-list"></div>
     </div>
 
     <div id="reports-card" class="card hidden">
-      <h2>-- Signalements 🪧 --</h2>
+      <h2>Signalements sur les parties officielles</h2>
       <div id="reports-list"></div>
     </div>
 
     <div id="all-levels-card" class="card hidden">
-      <h2>-- Toutes les parties officielles 🌐 --</h2>
+      <h2>Toutes les parties officielles (retirer le statut)</h2>
       <div id="all-list"></div>
     </div>
   </div>

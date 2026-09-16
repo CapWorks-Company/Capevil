@@ -193,6 +193,10 @@ canvas#stage {
   background: #000; border: 2px solid var(--border); border-radius: 8px;
   image-rendering: pixelated;
   max-width: 100%;
+  /* Safety net alongside game.js's own live window-fit sizing (see
+     sizeCanvasToLevel) — belt and suspenders so a tall split-screen canvas
+     can never push the page into scrolling even on a first-paint edge case. */
+  max-height: 80vh;
 }
 .hud {
   display: flex; justify-content: space-between; align-items: center;

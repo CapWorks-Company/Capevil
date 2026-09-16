@@ -76,11 +76,10 @@ let hiddenLayers = new Set(); // `layer` values currently toggled off in the lay
 let editRealView = false; // "🎬 Voir le jeu" — read-only static preview of exactly what the real game
                            // renders (no grid/trigger zones/invisible entities/edit-only dimming), toggled
                            // straight from the edit canvas, no playtest needed — see render()/handleCellClick.
-let propsTab = 'actions'; // 'general' | 'actions' | 'activation' — for TRIGGER/BUTTON/PLATE only, which of the
-                           // props panel's tabs is showing (see renderPropsTabBar). Defaults to "Actions" — what
-                           // these three exist for, and what used to sit immediately visible right below Général
-                           // before this tab split — not "Général", so selecting one still lands you straight on
-                           // its action list exactly like before. Other entity types have too little to configure
+let propsTab = 'general'; // 'general' | 'actions' | 'activation' — for TRIGGER/BUTTON/PLATE only, which of the
+                           // props panel's tabs is showing (see renderPropsTabBar). Defaults to "Général" — the
+                           // same first thing every other entity type opens on — so selecting one always lands
+                           // you on position/size/state first. Other entity types have too little to configure
                            // to need tabs at all and keep a single flat panel.
 let lastPropsTabEntityId = null; // last entity id renderProps ran the tab logic for — resets propsTab back to
                                   // 'general' whenever the selection changes to a different entity (staying on
@@ -1168,11 +1167,11 @@ function renderProps() {
   // flat panel (the pre-existing layout) stays the simplest option.
   const isTabbedType = ent.type === ENTITY_TYPES.TRIGGER || ent.type === ENTITY_TYPES.BUTTON || ent.type === ENTITY_TYPES.PLATE;
   if (isTabbedType) {
-    // Switching to a different entity always lands back on "Actions" — only
+    // Switching to a different entity always lands back on "Général" — only
     // staying on the SAME entity (e.g. after editing a field) preserves
     // whichever tab was open, exactly like the Actions panel's own press/
     // release sub-tabs (actionsPanelTarget) do.
-    if (ent.id !== lastPropsTabEntityId) { propsTab = 'actions'; lastPropsTabEntityId = ent.id; }
+    if (ent.id !== lastPropsTabEntityId) { propsTab = 'general'; lastPropsTabEntityId = ent.id; }
   } else {
     lastPropsTabEntityId = null;
   }
@@ -2116,8 +2115,12 @@ function togglePlaytest() {
   if (playtesting) {
     btn.textContent = '⏹ Arrêter le test';
     if (realViewBtn) realViewBtn.style.display = 'none'; // its own edit-canvas concept, meaningless mid-playtest
+    // A 2-player level gets two full-size viewports stacked vertically (see
+    // engine.js's render/_updateCamera split) — matches game.html's own
+    // sizeCanvasToLevel so playtesting looks exactly like real play.
+    const playtestH = Math.min(520, level.rows * CELL);
     canvas.width = Math.min(900, level.cols * CELL);
-    canvas.height = Math.min(520, level.rows * CELL);
+    canvas.height = level.playerStart2 ? playtestH * 2 : playtestH;
     testEngine = new Engine(canvas, cloneLevel(level));
     testEngine.debugTriggers = false; // starts in the real view by default — 🐞 debug view is the opt-in now
     testEngine.start();
