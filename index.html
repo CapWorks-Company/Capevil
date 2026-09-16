@@ -12,9 +12,8 @@
   <div class="topbar">
     <h1><span>Cap</span>evil</h1>
     <nav>
-      <a class="btn small" href="game.html">Jouer la démo</a>
       <a class="btn small primary" href="editor.html">+ Créer un niveau</a>
-      <a class="btn small" href="admin.html" title="Espace admin">🛡 Admin</a>
+      <a class="btn small hidden" id="admin-link" href="admin.html" title="Espace admin">🛡 Admin</a>
     </nav>
     <div id="account-bar"></div>
   </div>
@@ -29,6 +28,14 @@
       ⚠️ La base de données Supabase n'est pas encore configurée (voir <code>js/config.js</code>).
       Les niveaux publiés ne sont pas encore disponibles, mais tu peux quand même créer et jouer
       des niveaux enregistrés localement dans ton navigateur ci-dessous.
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>🗺️ Aventure</h2>
+        <span class="muted label-hint">La campagne officielle de Capevil, dans l'ordre.</span>
+      </div>
+      <div class="level-grid" id="adventure-list"></div>
     </div>
 
     <div class="card">

@@ -1,22 +1,25 @@
 import { Engine } from './engine.js';
 import { buildSampleLevel } from './sample-level.js';
-import { deserializeLevel } from './level-model.js';
+import { deserializeLevel, createEmptyLevel } from './level-model.js';
 import { getLevel, recordPlay, recordWin, likeLevel, hasLikedLevel, reportLevel, isBackendReady } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
 import { showToast, promptModal } from './ui-kit.js';
 import { mountAudioButton } from './audio-ui.js';
+import { discoverCampaignLevels, cloneCampaignLevel, isUnlocked, markCompleted } from './campaign.js';
 
 const canvas = document.getElementById('stage');
 const deathsEl = document.getElementById('deaths');
 const titleEl = document.getElementById('level-title');
 const authorEl = document.getElementById('level-author');
 const officialBadge = document.getElementById('official-badge');
+const campaignBadge = document.getElementById('campaign-badge');
 const likeBtn = document.getElementById('like-btn');
 const likeCountEl = document.getElementById('like-count');
 const reportBtn = document.getElementById('report-btn');
 const winOverlay = document.getElementById('win-overlay');
 const winDeaths = document.getElementById('win-deaths');
+const winNextBtn = document.getElementById('win-next-level');
 const loadError = document.getElementById('load-error');
 const accountBarEl = document.getElementById('account-bar');
 
@@ -32,6 +35,11 @@ window.addEventListener('resize', fitCanvas);
 const params = new URLSearchParams(location.search);
 const remoteId = params.get('id');
 const localKey = params.get('local');
+// The 🗺️ Aventure campaign (see js/campaign.js) — an index into the
+// auto-discovered level list, e.g. game.html?campaign=0 for "Niveau 1".
+const campaignParam = params.get('campaign');
+const campaignIndex = campaignParam !== null ? parseInt(campaignParam, 10) : null;
+let campaignLevels = null; // set by loadLevel() once discovery resolves — onWin reuses it to find "the next one".
 
 let engine = null;
 let session = null;
@@ -69,6 +77,23 @@ async function loadLevel() {
   if (localKey) {
     const raw = localStorage.getItem(localKey);
     if (raw) return deserializeLevel(raw);
+  }
+  if (campaignIndex !== null) {
+    campaignLevels = await discoverCampaignLevels();
+    const entry = campaignLevels[campaignIndex];
+    if (!entry) {
+      loadError.textContent = "Ce niveau d'aventure n'existe pas.";
+      loadError.classList.remove('hidden');
+      return createEmptyLevel('Niveau introuvable');
+    }
+    if (!isUnlocked(campaignIndex)) {
+      loadError.textContent = "Ce niveau d'aventure n'est pas encore débloqué — termine le précédent d'abord.";
+      loadError.classList.remove('hidden');
+      return createEmptyLevel('Niveau verrouillé');
+    }
+    campaignBadge.textContent = `🗺️ Aventure — niveau ${campaignIndex + 1}`;
+    campaignBadge.classList.remove('hidden');
+    return cloneCampaignLevel(entry);
   }
   return buildSampleLevel();
 }
@@ -108,6 +133,14 @@ loadLevel().then((level) => {
       winDeaths.textContent = deaths;
       winOverlay.classList.remove('hidden');
       if (remoteId) recordWin(remoteId);
+      if (campaignIndex !== null && campaignLevels) {
+        markCompleted(campaignIndex);
+        const nextIndex = campaignIndex + 1;
+        if (campaignLevels[nextIndex]) {
+          winNextBtn.href = `game.html?campaign=${nextIndex}`;
+          winNextBtn.classList.remove('hidden');
+        }
+      }
     },
     onStateChange: ({ deaths }) => { deathsEl.textContent = deaths; },
   });

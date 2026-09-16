@@ -29,6 +29,7 @@
       <strong id="level-title">Niveau</strong>
       <span class="muted" id="level-author"></span>
       <span class="pill hidden" id="official-badge" title="Ce niveau à été approuvé par un admin.">🏅 officiel</span>
+      <span class="pill hidden" id="campaign-badge">🗺️ Aventure</span>
     </div>
     <div class="flex-row">
       <button class="btn small hidden" id="like-btn">💖 Liker (<span id="like-count">0</span>)</button>
@@ -49,7 +50,8 @@
       <h2>🏆 Niveau terminé !</h2>
       <p>Nombre de morts : <b id="win-deaths">0</b></p>
       <div class="flex-row center" style="margin-top:16px;">
-        <button class="btn primary" id="win-restart">Rejouer</button>
+        <a class="btn primary hidden" id="win-next-level">▶ Niveau suivant</a>
+        <button class="btn" id="win-restart">Rejouer</button>
         <a class="btn" href="index.html">Retour à l'accueil</a>
       </div>
     </div>

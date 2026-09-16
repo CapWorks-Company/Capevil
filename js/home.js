@@ -1,7 +1,8 @@
-import { listLevels, isBackendReady, likeLevel, getMyLikedLevelIds, requestApproval, listMyLevels, deleteOwnLevel, reportLevel } from './supabase-client.js';
+import { listLevels, isBackendReady, likeLevel, getMyLikedLevelIds, requestApproval, listMyLevels, deleteOwnLevel, reportLevel, amIAdmin } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { LOCAL_PREFIX, listLocalDrafts, deleteLocalDraft } from './local-storage.js';
 import { showToast, confirmModal, promptModal } from './ui-kit.js';
+import { discoverCampaignLevels, unlockedCount } from './campaign.js';
 
 const listEl = document.getElementById('levels-list');
 const officialListEl = document.getElementById('official-list');
@@ -11,6 +12,8 @@ const localListEl = document.getElementById('local-list');
 const myLevelsListEl = document.getElementById('my-levels-list');
 const myLevelsHint = document.getElementById('my-levels-hint');
 const accountBar = document.getElementById('account-bar');
+const adventureListEl = document.getElementById('adventure-list');
+const adminLinkEl = document.getElementById('admin-link');
 
 let currentSession = null;
 let likedLevelIds = new Set(); // level ids the signed-in account has already liked (one like per account)
@@ -208,14 +211,57 @@ function refreshLocalDrafts() {
   });
 }
 
+// The 🗺️ Aventure section: Capevil's own built-in campaign (see
+// js/campaign.js — auto-discovered from levels/Niveau_1.json,
+// levels/Niveau_2.json, … dropped into that folder, no manifest to edit).
+// Levels not yet reached (sequential unlock, tracked per browser) are still
+// listed — so the campaign's full length is visible — just dimmed and
+// unplayable.
+async function refreshAdventure() {
+  if (!adventureListEl) return;
+  adventureListEl.innerHTML = emptyState('Chargement…');
+  const levels = await discoverCampaignLevels();
+  if (!levels.length) {
+    adventureListEl.innerHTML = emptyState('Aucun niveau d\'aventure pour l\'instant — bientôt !');
+    return;
+  }
+  const unlocked = unlockedCount();
+  adventureListEl.innerHTML = levels.map(({ index, level }) => {
+    const isUnlocked = index < unlocked;
+    const title = isUnlocked ? (level.title || `Niveau ${index + 1}`) : `Niveau ${index + 1}`;
+    return `
+      <div class="level-card${isUnlocked ? '' : ' level-locked'}">
+        <div class="lc-title">${isUnlocked ? '' : '🔒 '}${escapeHtml(title)}</div>
+        <div class="lc-stats"><span>Niveau ${index + 1} / ${levels.length}</span></div>
+        <div class="lc-actions">
+          ${isUnlocked
+            ? `<a class="btn small accent" href="game.html?campaign=${index}">▶ Jouer</a>`
+            : `<button class="btn small" disabled title="Termine le niveau précédent pour débloquer celui-ci">🔒 Verrouillé</button>`}
+        </div>
+      </div>`;
+  }).join('');
+}
+
 function refreshAll() {
+  refreshAdventure();
   refreshOfficial();
   refreshLevels(searchInput.value);
   refreshMyLevels();
 }
 
+// The 🛡 Admin button in the topbar is only for admins — everyone else
+// never sees it exists, it's just hidden by default and revealed only once
+// amIAdmin() (Supabase RPC, session-aware) confirms the signed-in account.
+async function refreshAdminLink(session) {
+  if (!adminLinkEl) return;
+  if (!session) { adminLinkEl.classList.add('hidden'); return; }
+  const admin = await amIAdmin();
+  adminLinkEl.classList.toggle('hidden', !admin);
+}
+
 searchInput.addEventListener('input', () => refreshLevels(searchInput.value));
-mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; likedLevelIds = new Set(); refreshAll(); } });
+mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; likedLevelIds = new Set(); refreshAll(); refreshAdminLink(session); } });
+refreshAdventure();
 refreshOfficial();
 refreshLevels();
 refreshLocalDrafts();
