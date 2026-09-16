@@ -10,6 +10,7 @@
 // load time by probing sequential numbers until one is missing. No manifest
 // file, no code edits, ever — dropping in Niveau 2.json is the entire job.
 import { deserializeLevel, cloneLevel } from './level-model.js';
+import { getServerCampaignUnlocked, bumpServerCampaignUnlocked, claimCampaignReward } from './supabase-client.js';
 
 // Memoized: every caller on a given page load (home.js, game.js) shares one
 // probe pass instead of each re-fetching the whole sequence.
@@ -74,10 +75,43 @@ export function isUnlocked(index) {
   return index >= 0 && index < unlockedCount();
 }
 
+function setLocalUnlocked(n) {
+  try { localStorage.setItem(PROGRESS_KEY, String(n)); } catch { /* ignore */ }
+}
+
 // Call once a campaign level is won — unlocks the next one (if any) for next
 // time. Monotonic: never re-locks a level that was already unlocked (e.g. by
-// replaying an earlier one).
+// replaying an earlier one). Kept for the signed-out path (and as the
+// immediate, synchronous local update even when signed in — see
+// claimCampaignWin below, which layers the server call on top of this).
 export function markCompleted(index) {
   const next = Math.max(unlockedCount(), index + 2); // index is 0-based; +2 reaches "the one after it"
-  try { localStorage.setItem(PROGRESS_KEY, String(next)); } catch { /* ignore */ }
+  setLocalUnlocked(next);
+}
+
+// Called once, on page load (home.js / game.js), while a session may or may
+// not exist yet. Reconciles the account's server-side progress with
+// whatever this browser already has in localStorage, always keeping the
+// HIGHER of the two — so neither playing as a guest first and signing in
+// later, nor switching devices, ever loses progress already made. A no-op
+// (returns null) when signed out, matching every other "compte" feature.
+export async function syncCampaignProgress() {
+  const serverUnlocked = await getServerCampaignUnlocked();
+  if (serverUnlocked === null) return null; // signed out — nothing to reconcile
+  const localUnlocked = unlockedCount();
+  const merged = Math.max(serverUnlocked, localUnlocked);
+  setLocalUnlocked(merged);
+  if (merged > serverUnlocked) await bumpServerCampaignUnlocked(merged);
+  return merged;
+}
+
+// Called on winning an Aventure level (see game.js's onWin). Always updates
+// local progress immediately (works offline/signed-out too), and — only
+// when signed in — also claims the Evicoins/skin-unlock reward server-side.
+// Returns whatever claimCampaignReward returned (null when signed out).
+export async function claimCampaignWin(index, deaths) {
+  markCompleted(index);
+  const result = await claimCampaignReward(index, deaths);
+  if (result && Number.isFinite(result.campaign_unlocked)) setLocalUnlocked(Math.max(unlockedCount(), result.campaign_unlocked));
+  return result;
 }

@@ -1,8 +1,11 @@
 import {
   isBackendReady, amIAdmin, listPendingApprovals, setLevelApproved,
   listLevels, listReports, dismissReport,
+  adminListProfiles, adminSetProfile,
 } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
+import { BADGES } from './catalog.js';
+import { showToast } from './ui-kit.js';
 
 const backendWarning = document.getElementById('backend-warning');
 const loginCard = document.getElementById('login-card');
@@ -14,6 +17,10 @@ const pendingListEl = document.getElementById('pending-list');
 const reportsListEl = document.getElementById('reports-list');
 const allListEl = document.getElementById('all-list');
 const accountBar = document.getElementById('account-bar');
+const accountsCard = document.getElementById('accounts-card');
+const accountsListEl = document.getElementById('accounts-list');
+const accountSearchInput = document.getElementById('account-search');
+const accountSearchBtn = document.getElementById('account-search-btn');
 
 function escapeHtml(s) {
   return (s || '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -33,12 +40,63 @@ async function refreshAdminPanels(session) {
   adminPanel.classList.toggle('hidden', !admin);
   reportsCard.classList.toggle('hidden', !admin);
   allLevelsCard.classList.toggle('hidden', !admin);
+  accountsCard.classList.toggle('hidden', !admin);
   if (!admin) return;
 
   refreshPending();
   refreshReports();
   refreshAllOfficial();
+  refreshAccounts();
 }
+
+// ------------------------------------------------------------- comptes joueurs
+async function refreshAccounts(search = '') {
+  const { profiles, error } = await adminListProfiles(search);
+  if (error) { accountsListEl.innerHTML = '<p class="muted">Erreur de chargement.</p>'; return; }
+  if (!profiles.length) { accountsListEl.innerHTML = '<p class="muted">Aucun compte trouvé.</p>'; return; }
+  accountsListEl.innerHTML = profiles.map((p) => {
+    const owned = new Set(p.badges || []);
+    return `
+    <div class="card" style="display:flex;flex-direction:column;gap:8px;">
+      <div class="flex-row" style="justify-content:space-between;">
+        <strong>${escapeHtml(p.display_name) || '—'}</strong>
+        <a class="btn small" href="profile.html?id=${p.id}" target="_blank" rel="noopener">👁️ Voir le profil</a>
+      </div>
+      <div class="muted" style="font-size:12px;">👍 ${p.encouragement_count ?? 0} encouragements</div>
+      <label style="font-size:13px;">🪙 Evicoins
+        <input type="number" min="0" step="1" class="acct-coins" data-id="${p.id}" value="${p.coins ?? 0}" style="width:100px;margin-left:6px;" />
+      </label>
+      <div class="flex-row" style="flex-wrap:wrap;gap:10px;font-size:12.5px;">
+        ${BADGES.map((b) => `
+          <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;">
+            <input type="checkbox" class="acct-badge" data-id="${p.id}" value="${b.id}" ${owned.has(b.id) ? 'checked' : ''} />
+            ${b.icon} ${escapeHtml(b.label)}
+          </label>
+        `).join('')}
+      </div>
+      <div>
+        <button class="btn small primary" data-save-acct="${p.id}">💾 Enregistrer</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  accountsListEl.querySelectorAll('button[data-save-acct]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.saveAcct;
+      const coinsInput = accountsListEl.querySelector(`.acct-coins[data-id="${id}"]`);
+      const coins = Math.max(0, parseInt(coinsInput.value, 10) || 0);
+      const badges = Array.from(accountsListEl.querySelectorAll(`.acct-badge[data-id="${id}"]:checked`)).map((cb) => cb.value);
+      btn.disabled = true;
+      const { error } = await adminSetProfile(id, coins, badges);
+      btn.disabled = false;
+      if (error) { showToast('Erreur lors de la sauvegarde du compte.', { type: 'error' }); return; }
+      showToast('Compte mis à jour ✓', { type: 'success' });
+    });
+  });
+}
+
+accountSearchBtn.addEventListener('click', () => refreshAccounts(accountSearchInput.value.trim()));
+accountSearchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') refreshAccounts(accountSearchInput.value.trim()); });
 
 async function refreshPending() {
   const { levels, error } = await listPendingApprovals();

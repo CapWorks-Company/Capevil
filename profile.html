@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Capevil — Profil</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦹</text></svg>">
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="js/mobile-guard.js"></script>
+  <div class="topbar">
+    <h1><span>Cap</span>evil</h1>
+    <nav id="site-nav"></nav>
+    <div id="account-bar"></div>
+  </div>
+
+  <div class="container narrow">
+    <div id="not-found-card" class="card card-danger hidden">
+      Ce profil est introuvable.
+    </div>
+
+    <div id="profile-card" class="card hidden">
+      <div class="flex-row between">
+        <div>
+          <h2 id="profile-name" style="margin-bottom:2px;"></h2>
+          <div class="muted" id="profile-badges" style="font-size:15px;"></div>
+        </div>
+        <div style="text-align:right;">
+          <div id="profile-encouragement-count" class="pill" style="font-size:13px;"></div>
+          <button type="button" class="btn small primary" id="encourage-btn" style="margin-top:8px;">💪 Encourager</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Niveaux publiés</h2>
+      <div class="level-grid" id="profile-levels"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/profile.js"></script>
+</body>
+</html>

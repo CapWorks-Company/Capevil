@@ -11,10 +11,7 @@
   <script src="js/mobile-guard.js"></script>
   <div class="topbar">
     <h1><span>Cap</span>evil</h1>
-    <nav>
-      <a class="btn small primary" href="editor.html">+ Créer un niveau</a>
-      <a class="btn small hidden" id="admin-link" href="admin.html" title="Espace admin">👑 Admin</a>
-    </nav>
+    <nav id="site-nav"></nav>
     <div id="account-bar"></div>
   </div>
 
@@ -28,39 +25,27 @@
       ⚠️ La base de données a un problème. Merci de réessayer ultérieurement !
     </div>
 
-    <div class="card">
-      <div class="card-header">
-        <h2>🗺️ Aventure</h2>
-        <span class="muted label-hint">Des niveaux préparés par CapEvil spécialement pour vous 😉</span>
-      </div>
-      <div class="level-grid" id="adventure-list"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <h2>🏅 Parties officielles</h2>
-        <span class="muted label-hint">Des niveaux sélectionnées et approuvées par les admins 🎖️</span>
-      </div>
-      <div class="level-grid" id="official-list"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <h2>🌍 Niveaux publiés par la communauté</h2>
-        <input type="search" id="search" placeholder="🔍 Rechercher un niveau…" />
-      </div>
-      <div class="level-grid" id="levels-list"></div>
-    </div>
-
-    <div class="card">
-      <h2>📦 Mes niveaux publiés</h2>
-      <p class="muted" id="my-levels-hint">Connecte-toi pour voir et gérer (modifier / supprimer) les niveaux publiés avec ton compte.</p>
-      <div class="level-grid" id="my-levels-list"></div>
-    </div>
-
-    <div class="card">
-      <h2>💾 Mes brouillons (sauvegardés dans ce navigateur)</h2>
-      <div class="level-grid" id="local-list"></div>
+    <div class="hub-grid">
+      <a class="hub-card" href="adventure.html">
+        <span class="hub-icon">🗺️</span>
+        <span class="hub-title">Aventure</span>
+        <span class="hub-desc muted">Des niveaux préparés par CapEvil, des récompenses et des skins à débloquer 😉</span>
+      </a>
+      <a class="hub-card" href="official.html">
+        <span class="hub-icon">🏅</span>
+        <span class="hub-title">Parties officielles</span>
+        <span class="hub-desc muted">Des niveaux sélectionnées et approuvées par les admins 🎖️</span>
+      </a>
+      <a class="hub-card" href="community.html">
+        <span class="hub-icon">🌍</span>
+        <span class="hub-title">Communauté</span>
+        <span class="hub-desc muted">Tous les niveaux publiés par les joueurs, et le classement Top Joueur 🏆</span>
+      </a>
+      <a class="hub-card" href="account.html">
+        <span class="hub-icon">👤</span>
+        <span class="hub-title">Mon compte</span>
+        <span class="hub-desc muted">Tes projets, tes brouillons, ta boutique d'Evicoins et tes skins 🪙</span>
+      </a>
     </div>
   </div>
 

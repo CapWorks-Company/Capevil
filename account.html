@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Capevil — Mon compte</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦹</text></svg>">
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <script src="js/mobile-guard.js"></script>
+  <div class="topbar">
+    <h1><span>Cap</span>evil</h1>
+    <nav id="site-nav"></nav>
+    <div id="account-bar"></div>
+  </div>
+
+  <div class="container">
+    <div id="backend-warning" class="card card-danger hidden">
+      ⚠️ La base de données a un problème. Merci de réessayer ultérieurement !
+    </div>
+
+    <div id="signed-out-card" class="card hidden" style="text-align:center;">
+      <h2>👤 Mon compte</h2>
+      <p class="muted">Connecte-toi (en haut) pour voir tes projets, ta boutique d'Evicoins et tes skins. Tes brouillons locaux et le classement Top Joueur restent visibles sans compte.</p>
+    </div>
+
+    <div id="wallet-card" class="card hidden">
+      <div class="flex-row between">
+        <div class="flex-row loose">
+          <span style="font-size:26px;">🪙</span>
+          <div>
+            <div style="font-size:22px;font-weight:800;font-family:var(--font-display);" id="wallet-coins">0</div>
+            <div class="muted" style="font-size:12px;">Evicoins</div>
+          </div>
+        </div>
+        <div id="wallet-badges" class="flex-row tight" style="flex-wrap:wrap;"></div>
+      </div>
+    </div>
+
+    <div id="account-tabs" class="subtabs" style="margin-bottom:14px;">
+      <button type="button" class="btn small active" data-tab="projects">📦 Mes projets</button>
+      <button type="button" class="btn small" data-tab="drafts">💾 Mes brouillons</button>
+      <button type="button" class="btn small" data-tab="shop">🛍️ Boutique</button>
+      <button type="button" class="btn small" data-tab="skins">🎨 Mes skins</button>
+      <button type="button" class="btn small" data-tab="top">🏆 Top Joueurs</button>
+    </div>
+
+    <div class="card" id="tab-projects">
+      <h2>📦 Mes niveaux publiés</h2>
+      <p class="muted" id="my-levels-hint">Connecte-toi pour voir et gérer (modifier / supprimer) les niveaux publiés avec ton compte.</p>
+      <p class="muted" id="my-levels-count" style="font-size:12.5px;"></p>
+      <div class="level-grid" id="my-levels-list"></div>
+    </div>
+
+    <div class="card hidden" id="tab-drafts">
+      <h2>💾 Mes brouillons (sauvegardés dans ce navigateur)</h2>
+      <div class="level-grid" id="local-list"></div>
+    </div>
+
+    <div class="card hidden" id="tab-shop">
+      <h2>🛍️ Boutique de badges</h2>
+      <p class="muted">Débloque du contenu dans l'éditeur avec tes Evicoins — gagnés en terminant des niveaux (Aventure, officiels ou communautaires).</p>
+      <div id="shop-list" class="level-grid"></div>
+    </div>
+
+    <div class="card hidden" id="tab-skins">
+      <h2>🎨 Mes skins</h2>
+      <p class="muted">Débloqués en avançant dans la campagne 🗺️ Aventure — voir la page Aventure pour la liste complète des paliers.</p>
+      <div id="skins-editor"></div>
+    </div>
+
+    <div class="card hidden" id="tab-top">
+      <h2>🏆 Top Joueurs</h2>
+      <p class="muted">Classé sur le nombre d'encouragements reçus — va encourager tes joueurs préférés depuis leur profil !</p>
+      <div id="top-players-list"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/account.js"></script>
+</body>
+</html>

@@ -49,11 +49,27 @@
     <div class="box">
       <h2>🏆 Niveau terminé !</h2>
       <p>Nombre de morts : <b id="win-deaths">0</b></p>
+      <div id="win-coins-line" class="hidden" style="font-family:var(--font-display);font-size:22px;font-weight:800;margin:10px 0;">
+        🪙 <span id="win-coins-count">0</span>
+      </div>
+      <p id="win-skins-line" class="muted hidden" style="font-size:12.5px;"></p>
       <div class="flex-row center" style="margin-top:16px;">
         <a class="btn primary hidden" id="win-next-level">▶ Niveau suivant</a>
         <button class="btn" id="win-restart">Rejouer</button>
-        <a class="btn" href="index.html">Retour à l'accueil</a>
+        <a class="btn" href="index.html">Retour au menu</a>
       </div>
+    </div>
+  </div>
+
+  <div class="container narrow" id="comments-section" style="margin-top:8px;">
+    <div class="card hidden" id="comments-card">
+      <h2>💬 Commentaires</h2>
+      <div id="comments-list" class="muted" style="font-size:13px;"></div>
+      <div id="comment-form-vip" class="flex-row" style="margin-top:12px;">
+        <input type="text" id="comment-input" placeholder="Ton commentaire…" style="flex:1;min-width:200px;" maxlength="500" />
+        <button class="btn small primary" id="comment-post-btn">Publier</button>
+      </div>
+      <p id="comment-form-locked" class="muted hidden" style="font-size:12.5px;">🔒 Réservé aux comptes avec le <a href="account.html#shop">Badge VIP</a>.</p>
     </div>
   </div>
 

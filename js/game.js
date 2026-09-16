@@ -1,13 +1,17 @@
 import { Engine } from './engine.js';
 import { buildSampleLevel } from './sample-level.js';
 import { deserializeLevel, createEmptyLevel } from './level-model.js';
-import { getLevel, recordPlay, recordWin, likeLevel, hasLikedLevel, reportLevel, hasReportedLevel, isBackendReady } from './supabase-client.js';
+import {
+  getLevel, recordPlay, recordWin, likeLevel, hasLikedLevel, reportLevel, hasReportedLevel, isBackendReady,
+  claimWinReward, listComments, postComment, getMyFullProfile,
+} from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
 import { showToast, promptModal } from './ui-kit.js';
 import { mountAudioButton } from './audio-ui.js';
-import { discoverCampaignLevels, cloneCampaignLevel, isUnlocked, markCompleted } from './campaign.js';
+import { discoverCampaignLevels, cloneCampaignLevel, isUnlocked, claimCampaignWin } from './campaign.js';
 import { CELL, GAME_VIEWPORT_MAX } from './constants.js';
+import { playerSkinById, objectSkinById, skinLabel } from './catalog.js';
 
 const canvas = document.getElementById('stage');
 const deathsEl = document.getElementById('deaths');
@@ -21,8 +25,34 @@ const reportBtn = document.getElementById('report-btn');
 const winOverlay = document.getElementById('win-overlay');
 const winDeaths = document.getElementById('win-deaths');
 const winNextBtn = document.getElementById('win-next-level');
+const winCoinsLine = document.getElementById('win-coins-line');
+const winCoinsCount = document.getElementById('win-coins-count');
+const winSkinsLine = document.getElementById('win-skins-line');
 const loadError = document.getElementById('load-error');
 const accountBarEl = document.getElementById('account-bar');
+const commentsCard = document.getElementById('comments-card');
+const commentsListEl = document.getElementById('comments-list');
+const commentInput = document.getElementById('comment-input');
+const commentPostBtn = document.getElementById('comment-post-btn');
+const commentFormVip = document.getElementById('comment-form-vip');
+const commentFormLocked = document.getElementById('comment-form-locked');
+
+// Counts up from 0 to `amount` over about half a second — the "animation de
+// l'argent" the win screen shows before the Suivant/Rejouer/Retour buttons
+// are usable for real (the buttons stay clickable throughout; this is purely
+// cosmetic, never blocks anything). No-ops (stays hidden) when amount is 0 —
+// most commonly because nobody is signed in, since rewards are account-only.
+function animateCoins(amount) {
+  if (!amount) return;
+  winCoinsLine.classList.remove('hidden');
+  const duration = 600, start = performance.now();
+  function tick(t) {
+    const p = Math.min(1, (t - start) / duration);
+    winCoinsCount.textContent = Math.round(amount * (1 - Math.pow(1 - p, 3))); // ease-out cubic
+    if (p < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
 
 // The canvas is sized to exactly match the level's own grid (cols/rows *
 // CELL) — no empty letterboxed space around a small level — but never
@@ -96,7 +126,7 @@ let engine = null;
 let session = null;
 let loadedLevel = null; // set once loadLevel() resolves — lets the resize handler re-fit the canvas later
 
-isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; refreshLikeButtonState(); refreshReportButtonState(); } }); });
+isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; refreshLikeButtonState(); refreshReportButtonState(); refreshCommentFormState(s); } }); });
 
 // A like is capped at one per account — grey the button out (without
 // touching the count span inside it) once this account has already liked
@@ -184,27 +214,52 @@ reportBtn.addEventListener('click', async () => {
   await refreshReportButtonState(); // stays disabled once reported; re-enables only on a genuine failure
 });
 
-loadLevel().then((level) => {
+loadLevel().then(async (level) => {
   titleEl.textContent = level.title || 'Niveau';
   authorEl.textContent = level.author ? `par ${level.author}` : '';
   loadedLevel = level;
   sizeCanvasToLevel(level);
 
+  // Account cosmetics (see js/catalog.js) — signed-out players, and anyone
+  // who never bought/reached a skin, fall through to null slots, which the
+  // engine already treats as "keep the built-in default look".
+  const myProfile = await getMyFullProfile();
+  const skins = myProfile ? {
+    skin1: playerSkinById(myProfile.skin1).primary ? playerSkinById(myProfile.skin1) : null,
+    skin2: playerSkinById(myProfile.skin2).primary ? playerSkinById(myProfile.skin2) : null,
+    objectSkin: myProfile.object_skin !== 'default' ? objectSkinById(myProfile.object_skin) : null,
+  } : {};
+
   engine = new Engine(canvas, level, {
+    skins,
     onDeath: () => {
       canvas.classList.add('flash');
       setTimeout(() => canvas.classList.remove('flash'), 200);
     },
-    onWin: ({ deaths }) => {
+    onWin: async ({ deaths }) => {
       winDeaths.textContent = deaths;
+      winCoinsLine.classList.add('hidden');
+      winSkinsLine.classList.add('hidden');
       winOverlay.classList.remove('hidden');
-      if (remoteId) recordWin(remoteId);
+      if (remoteId) {
+        recordWin(remoteId);
+        const coins = await claimWinReward(remoteId, deaths);
+        animateCoins(coins);
+      }
       if (campaignIndex !== null && campaignLevels) {
-        markCompleted(campaignIndex);
         const nextIndex = campaignIndex + 1;
         if (campaignLevels[nextIndex]) {
           winNextBtn.href = `game.html?campaign=${nextIndex}`;
           winNextBtn.classList.remove('hidden');
+        }
+        const reward = await claimCampaignWin(campaignIndex, deaths);
+        if (reward) {
+          animateCoins(reward.coins_awarded);
+          if (reward.new_skins && reward.new_skins.length) {
+            const names = reward.new_skins.map(skinLabel);
+            winSkinsLine.textContent = `🎁 Nouveau skin débloqué : ${names.join(', ')} — choisis-le dans « Mon compte ».`;
+            winSkinsLine.classList.remove('hidden');
+          }
         }
       }
     },
@@ -212,12 +267,58 @@ loadLevel().then((level) => {
   });
   engine.start();
   window.__engine = engine; // handy for debugging / automated testing from the console
+
+  // Comments only make sense for a real published level (a levels.id row to
+  // attach to) — a campaign level (static JSON, no DB row) or a local draft
+  // never shows the section at all.
+  if (remoteId) { commentsCard.classList.remove('hidden'); refreshComments(); }
 });
 
 // Re-fit if the window is resized after load (rotating a tablet, resizing a
 // desktop window, …) — canvas.width/height can be changed freely mid-game,
 // Engine just reads them fresh every frame (see render/_updateCamera).
 window.addEventListener('resize', () => { if (loadedLevel) sizeCanvasToLevel(loadedLevel); });
+
+// ------------------------------------------------------------- commentaires
+// Lecture publique pour tout le monde ; poster est réservé au badge VIP (côté
+// serveur — voir post_comment() — et reflété ici juste pour l'UI : le
+// formulaire est simplement caché/désactivé sans ce badge plutôt que de
+// laisser quelqu'un taper un commentaire pour se le voir refuser à la fin).
+let iAmVip = false;
+
+async function refreshComments() {
+  const { comments } = await listComments(remoteId);
+  if (!comments.length) {
+    commentsListEl.innerHTML = '<p>Aucun commentaire pour l\'instant.</p>';
+  } else {
+    commentsListEl.innerHTML = comments.map((c) => `
+      <div style="padding:8px 0;border-bottom:1px solid var(--border);">
+        <strong style="color:var(--text);">${(c.author_name || '—').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]))}</strong>
+        <span style="font-size:11px;">${new Date(c.created_at).toLocaleDateString('fr-FR')}</span>
+        <div>${c.body.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]))}</div>
+      </div>`).join('');
+  }
+}
+
+async function refreshCommentFormState(session) {
+  if (!session) { commentFormVip.classList.add('hidden'); commentFormLocked.classList.add('hidden'); return; }
+  const profile = await getMyFullProfile();
+  iAmVip = !!(profile && (profile.badges || []).includes('vip'));
+  commentFormVip.classList.toggle('hidden', !iAmVip);
+  commentFormLocked.classList.toggle('hidden', iAmVip);
+}
+
+commentPostBtn.addEventListener('click', async () => {
+  if (!remoteId || !iAmVip) return;
+  const body = commentInput.value.trim();
+  if (!body) return;
+  commentPostBtn.disabled = true;
+  const { error } = await postComment(remoteId, body);
+  commentPostBtn.disabled = false;
+  if (error) { showToast("Erreur lors de l'envoi du commentaire.", { type: 'error' }); return; }
+  commentInput.value = '';
+  refreshComments();
+});
 
 document.getElementById('restart-btn').addEventListener('click', () => engine && engine.reset());
 document.getElementById('win-restart').addEventListener('click', () => {

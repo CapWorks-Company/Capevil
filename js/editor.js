@@ -13,11 +13,12 @@ import {
 import { buildSampleLevel } from './sample-level.js';
 import { Engine } from './engine.js';
 import { saveLocalDraft, loadLocalDraft } from './local-storage.js';
-import { publishLevel, updateOwnLevel, getLevel, isBackendReady, getSession, getMyProfile, canSignIn } from './supabase-client.js';
+import { publishLevel, updateOwnLevel, getLevel, isBackendReady, getSession, getMyProfile, getMyFullProfile, canSignIn } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
 import { mountAudioButton } from './audio-ui.js';
 import { showToast, confirmModal } from './ui-kit.js';
+import { badgeById, ENTITY_BADGE_REQUIREMENT, WORLD_CONDITIONS_BADGE } from './catalog.js';
 
 // ---------------------------------------------------------------- palette
 const PALETTE = [
@@ -63,6 +64,7 @@ let session = null;       // current Supabase Auth session, kept in sync via onA
 let editingRemoteId = null; // set when this editor session is editing an already-published level
 let previewMode = false;  // read-only admin preview: full editor view, nothing can be changed/saved
 let authGateBypass = false; // true once canSignIn() comes back false (Supabase unreachable) — see updateAuthGate
+let myBadges = new Set(); // signed-in account's owned badge ids — gates the palette + world-conditions button, see refreshMyBadges()
 let showCoordOverlay = false; // true while a "Téléporter un élément" action's x/y field has focus
 let blockViewIds = new Set(); // entity ids currently showing their actions as "blocs" (see renderActionBlock) instead of the compact list
 let bottomTab = 'hierarchy'; // 'hierarchy' | 'actions' — which panel occupies the shared slot below the canvas
@@ -275,8 +277,11 @@ async function init() {
       onChange: async (s) => {
         session = s;
         await syncAuthorField();
+        await refreshMyBadges();
         updatePublishButtonState();
         updateAuthGate();
+        buildPalette();
+        updateWorldConditionsGate();
       },
     });
   } else {
@@ -311,6 +316,18 @@ function updateAuthGate() {
   const show = previewMode || !!session || authGateBypass;
   authGateEl.classList.toggle('hidden', show);
   editorMainEl.classList.toggle('hidden', !show);
+}
+
+// Refreshes `myBadges` from the signed-in account's full profile — badges
+// gate both the palette (spring/fan/teleporter/button+plate/crate, see
+// ENTITY_BADGE_REQUIREMENT) and the "🌍 Condition du monde" button (see
+// WORLD_CONDITIONS_BADGE). Signed out (or a level being viewed with no
+// session at all) just means every gated tool stays locked, same as an
+// account that never bought anything.
+async function refreshMyBadges() {
+  if (!session) { myBadges = new Set(); return; }
+  const profile = await getMyFullProfile();
+  myBadges = new Set((profile && profile.badges) || []);
 }
 
 // The author name is always the signed-in account's display name — never a
@@ -371,6 +388,19 @@ function applyPreviewModeUI() {
   titleInput.readOnly = true;
 }
 
+// Locks/unlocks the "🌍 Condition du monde" button itself (grid size stays
+// free to change — only gravité/fond/glitch-du-plafond, the actual "world
+// conditions", are behind the badge, but they all share one modal/button so
+// the gate applies to the whole thing). Kept visible-but-locked rather than
+// hidden, same reasoning as the palette (see paletteButton).
+function updateWorldConditionsGate() {
+  const btn = document.getElementById('level-settings-btn');
+  if (!btn) return;
+  const locked = !myBadges.has(WORLD_CONDITIONS_BADGE);
+  btn.classList.toggle('gate-locked', locked);
+  btn.title = locked ? 'Réservé aux comptes avec le Badge Monde — achète-le dans la Boutique (Mon compte).' : '';
+}
+
 // Small glanceable summary on the "🌍 Condition du monde" toolbar button, so
 // the grid size (and any non-default gravity) is visible without opening the
 // settings panel.
@@ -397,13 +427,32 @@ function buildPalette() {
   const hr = document.createElement('hr');
   hr.className = 'toolbox-sep';
   toolboxEl.appendChild(hr);
-  for (const p of PALETTE) toolboxEl.appendChild(paletteButton(p.type, p.label, p.color, p.icon));
+  for (const p of PALETTE) {
+    const requiredBadge = ENTITY_BADGE_REQUIREMENT[p.type];
+    const locked = requiredBadge && !myBadges.has(requiredBadge);
+    toolboxEl.appendChild(paletteButton(p.type, p.label, p.color, p.icon, locked ? requiredBadge : null));
+  }
 }
 
-function paletteButton(toolId, label, color, icon = '') {
+// `lockedBadgeId`: when set, this entity is gated by a badge the signed-in
+// account doesn't own yet (see ENTITY_BADGE_REQUIREMENT/refreshMyBadges).
+// The button stays VISIBLE but disabled-looking with a lock icon — hiding it
+// entirely would make the feature undiscoverable — and clicking it points to
+// the shop instead of selecting the tool.
+function paletteButton(toolId, label, color, icon = '', lockedBadgeId = null) {
   const btn = document.createElement('button');
-  btn.className = 'palette-btn' + (tool === toolId ? ' active' : '');
+  btn.className = 'palette-btn' + (tool === toolId ? ' active' : '') + (lockedBadgeId ? ' locked' : '');
   btn.dataset.tool = toolId;
+  if (lockedBadgeId) {
+    const badge = badgeById(lockedBadgeId);
+    const badgeLabel = badge ? badge.label : lockedBadgeId;
+    btn.innerHTML = `<span class="palette-swatch" style="background:${color};opacity:.35;">${icon}</span>${label} <span aria-hidden="true">🔒</span>`;
+    btn.title = `Réservé aux comptes avec le ${badgeLabel} — achète-le dans la Boutique (Mon compte).`;
+    btn.addEventListener('click', () => {
+      showToast(`🔒 ${badgeLabel} requis pour ça — va l'acheter dans la Boutique (Mon compte → Boutique).`, { type: 'error' });
+    });
+    return btn;
+  }
   btn.innerHTML = `<span class="palette-swatch" style="background:${color}">${icon}</span>${label}`;
   btn.addEventListener('click', () => { tool = toolId; selectedId = null; buildPalette(); render(); renderProps(); });
   return btn;
@@ -2056,7 +2105,13 @@ function bindLevelSettingsModal() {
   const doneBtn = document.getElementById('level-settings-done');
   const open = () => modal.classList.remove('hidden');
   const close = () => modal.classList.add('hidden');
-  openBtn.addEventListener('click', open);
+  openBtn.addEventListener('click', () => {
+    if (!previewMode && !myBadges.has(WORLD_CONDITIONS_BADGE)) {
+      showToast('🔒 Badge Monde requis pour changer la condition du monde — va l\'acheter dans la Boutique (Mon compte → Boutique).', { type: 'error' });
+      return;
+    }
+    open();
+  });
   closeBtn.addEventListener('click', close);
   doneBtn.addEventListener('click', close);
   modal.addEventListener('click', (e) => { if (e.target === modal) close(); });

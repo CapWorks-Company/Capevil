@@ -19,13 +19,22 @@ function easeInOutCubic(t) {
 }
 
 export class Engine {
-  constructor(canvas, level, { onDeath, onWin, onStateChange } = {}) {
+  // `skins` (optional): { skin1: {primary,secondary}|null, skin2: {...}|null,
+  // objectSkin: {base,glow}|null } — the signed-in account's cosmetic
+  // choices (see js/catalog.js + game.js), resolved to actual colors before
+  // being handed to the engine so this file never has to know about badges,
+  // accounts, or Supabase. A null/absent entry — the normal case for a
+  // signed-out player, or anyone who never bought a skin — means "keep the
+  // engine's own built-in default look", exactly as before this feature
+  // existed.
+  constructor(canvas, level, { onDeath, onWin, onStateChange, skins } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.level = level;
     this.onDeath = onDeath || (() => {});
     this.onWin = onWin || (() => {});
     this.onStateChange = onStateChange || (() => {});
+    this.skins = skins || {};
     this.raw = { left: false, right: false, up: false, down: false, jump: false };
     // Player 2's own input state/keymap (see constants around "2 joueurs" —
     // level-model.js's playerStart2) — always built, even for a single-player
@@ -1541,6 +1550,14 @@ export class Engine {
         // cell's genuinely exposed (non-adjacent) edges, in any direction.
         const cells = this._blockCells;
         const cellX = Math.round(rt.x / CELL), cellY = Math.round(rt.y / CELL);
+        // Object skin (account cosmetic, see js/catalog.js) recolors the flat
+        // fill only — the highlight/shadow/outline strips stay as-is so the
+        // depth cues that make stacked cells read correctly never change.
+        // 'neon' is the one skin with a `glow` color: a soft shadow blur
+        // behind the fill, cleared right after so it never bleeds onto the
+        // highlight/shadow strips drawn next.
+        const objSkin = this.skins.objectSkin;
+        const fillColor = (objSkin && objSkin.base) || '#181a26';
         for (let i = 0; i < rt.def.w; i++) {
           for (let j = 0; j < rt.def.h; j++) {
             const cx = cellX + i, cy = cellY + j;
@@ -1549,8 +1566,17 @@ export class Engine {
             const hasDown = cells.has(`${cx},${cy + 1}`);
             const hasLeft = cells.has(`${cx - 1},${cy}`);
             const hasRight = cells.has(`${cx + 1},${cy}`);
-            ctx.fillStyle = '#181a26';
-            ctx.fillRect(px, py, CELL, CELL);
+            if (objSkin && objSkin.glow) {
+              ctx.save();
+              ctx.shadowColor = objSkin.glow;
+              ctx.shadowBlur = 10;
+              ctx.fillStyle = fillColor;
+              ctx.fillRect(px, py, CELL, CELL);
+              ctx.restore();
+            } else {
+              ctx.fillStyle = fillColor;
+              ctx.fillRect(px, py, CELL, CELL);
+            }
             if (!hasUp) { ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(px, py, CELL, 3); }
             if (!hasDown) { ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(px, py + CELL - 3, CELL, 3); }
             if (!hasLeft) { ctx.fillStyle = 'rgba(255,255,255,0.04)'; ctx.fillRect(px, py, 3, CELL); }
@@ -1933,8 +1959,14 @@ export class Engine {
     roundRect(ctx, 2, h - 5, w - 4, 6, 3);
     ctx.fill();
 
+    // Account skin (see js/catalog.js) overrides the default role-based
+    // orange (p1) / blue (p2) gradient when the signed-in player owns one —
+    // a null/absent slot (signed-out, or the 'default' skin) keeps the
+    // original two-tone look exactly as before this feature existed.
+    const skin = isP2 ? this.skins.skin2 : this.skins.skin1;
     const grad = ctx.createLinearGradient(0, 0, 0, h);
-    if (isP2) { grad.addColorStop(0, '#2ec4ff'); grad.addColorStop(1, '#0d7fb8'); }
+    if (skin && skin.primary) { grad.addColorStop(0, skin.primary); grad.addColorStop(1, skin.secondary || skin.primary); }
+    else if (isP2) { grad.addColorStop(0, '#2ec4ff'); grad.addColorStop(1, '#0d7fb8'); }
     else { grad.addColorStop(0, '#f77f00'); grad.addColorStop(1, '#d1600a'); }
     ctx.fillStyle = grad;
     roundRect(ctx, 0, 0, w, h, w * 0.28);

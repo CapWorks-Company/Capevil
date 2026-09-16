@@ -97,6 +97,187 @@ export async function getMyProfile() {
   return data;
 }
 
+const FULL_PROFILE_COLUMNS = 'id, display_name, is_admin, coins, badges, skin1, skin2, object_skin, unlocked_skins, campaign_unlocked, encouragement_count, created_at';
+
+// The signed-in account's own full economy/cosmetics state — coins, owned
+// badges, chosen + unlocked skins. Used by the account page's boutique/skins
+// tabs, the editor's badge gating, and engine.js's skin rendering. Null when
+// signed out (there's nothing to show — this is all "seulement pour compte").
+export async function getMyFullProfile() {
+  const client = await getClient();
+  if (!client) return null;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return null;
+  const { data, error } = await client.from('profiles').select(FULL_PROFILE_COLUMNS).eq('id', session.user.id).single();
+  if (error) return null;
+  return data;
+}
+
+// A given account's PUBLIC profile (profile.html) — same table, same public
+// read policy as everywhere else, but the caller deliberately only asks for
+// the columns worth showing to a stranger (no `coins`: a wallet balance
+// isn't the kind of thing this site puts on a public page, even though the
+// table's own RLS policy would technically allow reading it).
+export async function getPublicProfile(userId) {
+  const client = await getClient();
+  if (!client) return null;
+  const { data, error } = await client.from('profiles').select('id, display_name, badges, encouragement_count, created_at').eq('id', userId).single();
+  if (error) return null;
+  return data;
+}
+
+// ---------------------------------------------------------------- économie
+// Achète un badge (voir js/catalog.js pour les prix/prérequis affichés côté
+// client — la vraie vérification vit dans buy_badge() côté serveur).
+export async function buyBadge(badgeId) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { data, error } = await client.rpc('buy_badge', { p_badge: badgeId });
+  if (error) return { error: error.message || 'error' };
+  return data; // { error, coins, badges } — data.error set means the purchase itself was refused (see buy_badge)
+}
+
+export async function setSkin(slot, skinId) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { error } = await client.rpc('set_skin', { p_slot: slot, p_skin: skinId });
+  return { error };
+}
+
+// Coins earned for winning a published (community/official) level — called
+// alongside recordWin(), never instead of it (see game.js).
+export async function claimWinReward(levelId, deaths) {
+  const client = await getClient();
+  if (!client) return 0;
+  const { data, error } = await client.rpc('claim_win_reward', { level_id: levelId, p_deaths: deaths });
+  if (error) return 0;
+  return data || 0;
+}
+
+// Coins + campaign-progress + skin unlocks for winning an 🗺️ Aventure level.
+// Returns null when signed out — the caller falls back to the pre-existing
+// localStorage-only progress tracking in that case (see js/campaign.js).
+export async function claimCampaignReward(campaignIndex, deaths) {
+  const client = await getClient();
+  if (!client) return null;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return null;
+  const { data, error } = await client.rpc('claim_campaign_reward', { p_index: campaignIndex, p_deaths: deaths });
+  if (error) return null;
+  return data; // { coins_awarded, total_coins, campaign_unlocked, new_skins }
+}
+
+export async function getServerCampaignUnlocked() {
+  const client = await getClient();
+  if (!client) return null;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return null;
+  const { data, error } = await client.rpc('get_campaign_unlocked');
+  if (error) return null;
+  return data;
+}
+
+export async function bumpServerCampaignUnlocked(value) {
+  const client = await getClient();
+  if (!client) return;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return;
+  await client.rpc('bump_campaign_unlocked', { p_value: value });
+}
+
+// ------------------------------------------------------------ encouragements
+// "Suivre" un autre compte (jamais le sien) — voir sql/schema.sql. Plus un
+// compte reçoit d'encouragements, plus il monte dans le classement Top Joueur.
+export async function encourage(userId) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { error } = await client.rpc('encourage', { p_user_id: userId });
+  return { error };
+}
+
+export async function unencourage(userId) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { error } = await client.rpc('unencourage', { p_user_id: userId });
+  return { error };
+}
+
+export async function hasEncouraged(userId) {
+  const client = await getClient();
+  if (!client) return false;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return false;
+  const { data, error } = await client.rpc('has_encouraged', { p_user_id: userId });
+  if (error) return false;
+  return !!data;
+}
+
+export async function listTopPlayers(limit = 50) {
+  const client = await getClient();
+  if (!client) return [];
+  const { data, error } = await client.rpc('list_top_players', { p_limit: limit });
+  if (error) return [];
+  return data || [];
+}
+
+// ---------------------------------------------------------------- commentaires
+// Lecture publique directe (comme les niveaux) ; poster passe par
+// post_comment() côté serveur, qui vérifie le badge VIP — voir game.js.
+// Two queries rather than a PostgREST embed: `comments.author_id` references
+// auth.users (not public.profiles directly — see sql/schema.sql), so the
+// `profiles!comments_author_id_fkey(...)` embed shorthand has no matching
+// foreign key to hang off and would fail. A second lookup for just the
+// distinct author ids involved is simple and doesn't depend on constraint
+// naming staying exactly in sync between the DB and this query.
+export async function listComments(levelId) {
+  const client = await getClient();
+  if (!client) return { comments: [], error: 'not_configured' };
+  const { data, error } = await client
+    .from('comments')
+    .select('id, author_id, body, created_at')
+    .eq('level_id', levelId)
+    .order('created_at', { ascending: false });
+  if (error) return { comments: [], error };
+  const authorIds = [...new Set(data.map((c) => c.author_id))];
+  let names = {};
+  if (authorIds.length) {
+    const { data: profs } = await client.from('profiles').select('id, display_name').in('id', authorIds);
+    names = Object.fromEntries((profs || []).map((p) => [p.id, p.display_name]));
+  }
+  return { comments: data.map((c) => ({ ...c, author_name: names[c.author_id] || '—' })), error: null };
+}
+
+export async function postComment(levelId, body) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { data, error } = await client.rpc('post_comment', { p_level_id: levelId, p_body: body });
+  if (error) return { error: error.message || 'error' };
+  return { error: null, id: data };
+}
+
+export async function deleteOwnComment(commentId) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { error } = await client.rpc('delete_own_comment', { p_comment_id: commentId });
+  return { error };
+}
+
+// ---------------------------------------------------------------- admin (économie)
+export async function adminListProfiles(search = '') {
+  const client = await getClient();
+  if (!client) return { profiles: [], error: 'not_configured' };
+  const { data, error } = await client.rpc('admin_list_profiles', { p_search: search });
+  if (error) return { profiles: [], error };
+  return { profiles: data, error: null };
+}
+
+export async function adminSetProfile(userId, coins, badges) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { error } = await client.rpc('admin_set_profile', { p_user_id: userId, p_coins: coins, p_badges: badges });
+  return { error };
+}
+
 // (deprecated names kept as aliases in case other pages import them)
 export const adminSignIn = signIn;
 export const adminSignOut = signOut;
@@ -156,6 +337,21 @@ export async function listLevels({ search = '', limit = 30, offset = 0, official
   if (officialOnly) query = query.eq('approved', true);
   if (search && search.trim()) query = query.ilike('title', `%${search.trim()}%`);
   const { data, error } = await query;
+  if (error) return { levels: [], error };
+  return { levels: data, error: null };
+}
+
+// A given account's published levels — used by the public profile page
+// (profile.html) so anyone can browse what someone else has built, same
+// data `levels are publicly readable` already exposes to everyone.
+export async function listLevelsByOwner(ownerId) {
+  const client = await getClient();
+  if (!client) return { levels: [], error: 'not_configured' };
+  const { data, error } = await client
+    .from('levels')
+    .select(LEVEL_LIST_COLUMNS)
+    .eq('owner_id', ownerId)
+    .order('created_at', { ascending: false });
   if (error) return { levels: [], error };
   return { levels: data, error: null };
 }

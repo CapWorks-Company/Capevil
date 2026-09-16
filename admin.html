@@ -58,6 +58,19 @@ where id = (select id from auth.users where email = 'ton-email@exemple.com');</p
       <h2>Toutes les parties officielles (retirer le statut)</h2>
       <div id="all-list"></div>
     </div>
+
+    <div id="accounts-card" class="card hidden">
+      <h2>Comptes joueurs — argent &amp; badges</h2>
+      <p class="muted" style="font-size:12.5px;">
+        Modifie directement les Evicoins et les badges d'un compte. Les autres colonnes
+        (skins, aventure…) ne sont pas éditables ici.
+      </p>
+      <div class="flex-row" style="margin-bottom:10px;">
+        <input type="text" id="account-search" placeholder="Chercher un pseudo…" style="flex:1;min-width:180px;" />
+        <button class="btn small" id="account-search-btn">🔎 Chercher</button>
+      </div>
+      <div id="accounts-list"></div>
+    </div>
   </div>
 
   <script type="module" src="js/admin.js"></script>
