@@ -139,6 +139,14 @@ export const DEFAULT_GRID = { cols: 30, rows: 14 };
 // beyond this range (columns 9-80, rows 9-30).
 export const GRID_LIMITS = { colsMin: 9, colsMax: 80, rowsMin: 9, rowsMax: 30 };
 
+// game.html's play canvas is sized to exactly match the level's own grid
+// (cols*CELL x rows*CELL) — no more empty letterboxed space around a small
+// level. This is only a CAP for levels bigger than that: beyond it the
+// canvas stops growing and the camera scrolls/follows the player(s) instead,
+// keeping CELL at its true fixed pixel size (a big level is never squeezed
+// smaller to fit — see Engine._updateCamera / _computeCamera).
+export const GAME_VIEWPORT_MAX = { w: 1000, h: 600 };
+
 // Teleporters sharing a "frequency" are linked together. Capped at 3 per
 // group (matches the physical idea of a few linked portals, and keeps the
 // cycling order easy to reason about in the editor).

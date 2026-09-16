@@ -95,7 +95,13 @@ export class Engine {
     this._resetPlayer();
     this.scheduled = []; // [{time, run}]
     this._teleportCooldown = 0;
+    // Single-player levels use `camera` alone. A 2-player level splits the
+    // canvas in half and drives `camera1`/`camera2` independently (see
+    // _updateCamera/render) — `camera` is kept in sync with `camera1` too, so
+    // any old code that only knows about a single camera still works.
     this.camera = { x: 0, y: 0 };
+    this.camera1 = { x: 0, y: 0 };
+    this.camera2 = { x: 0, y: 0 };
     this.particles.clear();
     this.shake = { magnitude: 0, duration: 0, time: 0 };
     this.onStateChange({ deaths: this.deaths });
@@ -1386,48 +1392,90 @@ export class Engine {
     if (value) sfx.vanish(); else sfx.appear();
   }
 
-  _updateCamera() {
-    const cv = this.canvas;
+  // Shared by both the single camera and the 2-player split-screen cameras
+  // below — given a group of players and the pixel size of the viewport
+  // they're sharing, centers on their midpoint and clamps to the level's
+  // edges (or centers on the level itself, when it's smaller than the
+  // viewport — see the render-centering comment this replaced).
+  _computeCameraFor(players, vpW, vpH) {
     const lvl = this.level;
     const levelW = lvl.cols * CELL, levelH = lvl.rows * CELL;
-    // The midpoint of all active players sits dead-center of the viewport
-    // (just the one player in a single-player level — the average of one
-    // point is itself) — the only thing that ever moves the camera
-    // off-center is the clamp against the level's edges below.
-    const midX = this.players.reduce((s, p) => s + p.x + p.w / 2, 0) / this.players.length;
-    const midY = this.players.reduce((s, p) => s + p.y + p.h / 2, 0) / this.players.length;
-    let cx = midX - cv.width / 2;
-    let cy = midY - cv.height / 2;
-    // A level narrower/shorter than the viewport has nowhere to scroll on
-    // that axis — center it in the extra space instead of pinning it to the
-    // top-left corner (the old Math.max(0, …) clamp always won in that case,
-    // since levelW - cv.width was negative, so the level sat flush left/top
-    // with all the leftover background bunched on the other side).
-    cx = levelW <= cv.width ? (levelW - cv.width) / 2 : Math.max(0, Math.min(cx, levelW - cv.width));
-    cy = levelH <= cv.height ? (levelH - cv.height) / 2 : Math.max(0, Math.min(cy, levelH - cv.height));
-    this.camera.x = cx; this.camera.y = cy;
+    const midX = players.reduce((s, p) => s + p.x + p.w / 2, 0) / players.length;
+    const midY = players.reduce((s, p) => s + p.y + p.h / 2, 0) / players.length;
+    let cx = midX - vpW / 2;
+    let cy = midY - vpH / 2;
+    cx = levelW <= vpW ? (levelW - vpW) / 2 : Math.max(0, Math.min(cx, levelW - vpW));
+    cy = levelH <= vpH ? (levelH - vpH) / 2 : Math.max(0, Math.min(cy, levelH - vpH));
+    return { x: cx, y: cy };
+  }
+
+  _updateCamera() {
+    const cv = this.canvas;
+    if (this.player2) {
+      // Split-screen: each player gets their own half of the canvas and
+      // their own camera, centered/clamped exactly like the single-player
+      // case but against that half's own width. Nothing stops the other
+      // player from being visible too, in whichever half their own position
+      // happens to land in — same as any camera, it just draws whatever's
+      // in range.
+      const halfW = Math.floor(cv.width / 2);
+      this.camera1 = this._computeCameraFor([this.player], halfW, cv.height);
+      this.camera2 = this._computeCameraFor([this.player2], cv.width - halfW, cv.height);
+      this.camera = this.camera1; // keep the single-camera field in sync for any other reader
+    } else {
+      this.camera = this._computeCameraFor(this.players, cv.width, cv.height);
+      this.camera1 = this.camera;
+    }
   }
 
   // ---------------------------------------------------------------- render
   render() {
     const ctx = this.ctx, cv = this.canvas;
-    ctx.fillStyle = this.level.background || '#1b1e2b';
-    ctx.fillRect(0, 0, cv.width, cv.height);
+    // Cell-occupancy lookup for BLOCK entities, rebuilt once per frame (not
+    // per viewport — split-screen draws the same set twice) so adjacent
+    // blocks render as one seamless mass with no visible seam between them.
+    this._blockCells = this._buildBlockCellSet();
+    if (this.player2) {
+      const halfW = Math.floor(cv.width / 2);
+      this._renderViewport(this.camera1, 0, 0, halfW, cv.height);
+      this._renderViewport(this.camera2, halfW, 0, cv.width - halfW, cv.height);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(halfW + 0.5, 0); ctx.lineTo(halfW + 0.5, cv.height); ctx.stroke();
+      ctx.restore();
+    } else {
+      this._renderViewport(this.camera, 0, 0, cv.width, cv.height);
+    }
+  }
+
+  // Draws the full scene (background, grid, entities, players, particles)
+  // once, clipped to a screenX/screenY/vpW/vpH rectangle of the canvas and
+  // following the given camera — the single-viewport case just calls this
+  // once over the whole canvas; split-screen calls it twice, once per half.
+  _renderViewport(camera, screenX, screenY, vpW, vpH) {
+    const ctx = this.ctx;
     ctx.save();
+    ctx.beginPath();
+    ctx.rect(screenX, screenY, vpW, vpH);
+    ctx.clip();
+    ctx.fillStyle = this.level.background || '#1b1e2b';
+    ctx.fillRect(screenX, screenY, vpW, vpH);
+
     let shakeX = 0, shakeY = 0;
     if (this.shake.time > 0) {
       const mag = this.shake.magnitude * (this.shake.time / this.shake.duration);
       shakeX = (Math.random() * 2 - 1) * mag;
       shakeY = (Math.random() * 2 - 1) * mag;
     }
-    ctx.translate(-this.camera.x + shakeX, -this.camera.y + shakeY);
+    ctx.translate(screenX - camera.x + shakeX, screenY - camera.y + shakeY);
 
     // grid backdrop — a build aid only: never shown in real gameplay, only in
     // the editor's debug/playtest view (same flag that reveals triggers).
     if (this.debugTriggers) {
       ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-      const startCol = Math.floor(this.camera.x / CELL), endCol = startCol + Math.ceil(cv.width / CELL) + 1;
-      const startRow = Math.floor(this.camera.y / CELL), endRow = startRow + Math.ceil(cv.height / CELL) + 1;
+      const startCol = Math.floor(camera.x / CELL), endCol = startCol + Math.ceil(vpW / CELL) + 1;
+      const startRow = Math.floor(camera.y / CELL), endRow = startRow + Math.ceil(vpH / CELL) + 1;
       for (let c = startCol; c <= endCol; c++) {
         ctx.beginPath(); ctx.moveTo(c * CELL, startRow * CELL); ctx.lineTo(c * CELL, endRow * CELL); ctx.stroke();
       }
@@ -1435,12 +1483,6 @@ export class Engine {
         ctx.beginPath(); ctx.moveTo(startCol * CELL, r * CELL); ctx.lineTo(endCol * CELL, r * CELL); ctx.stroke();
       }
     }
-
-    // Cell-occupancy lookup for BLOCK entities, rebuilt each frame (cheap —
-    // levels are at most 80x30 cells) so adjacent blocks — whether one wide
-    // authored entity or several separately-placed 1x1 ones — render as one
-    // seamless mass with no visible seam between them.
-    this._blockCells = this._buildBlockCellSet();
 
     // Entities can be assigned a purely cosmetic paint-order layer (a free
     // integer, see constants.js's clampLayer) so a level author can tuck

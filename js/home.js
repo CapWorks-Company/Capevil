@@ -212,8 +212,8 @@ function refreshLocalDrafts() {
 }
 
 // The 🗺️ Aventure section: Capevil's own built-in campaign (see
-// js/campaign.js — auto-discovered from levels/Niveau_1.json,
-// levels/Niveau_2.json, … dropped into that folder, no manifest to edit).
+// js/campaign.js — auto-discovered from levels/Niveau 1.json,
+// levels/Niveau 2.json, … dropped into that folder, no manifest to edit).
 // Levels not yet reached (sequential unlock, tracked per browser) are still
 // listed — so the campaign's full length is visible — just dimmed and
 // unplayable.

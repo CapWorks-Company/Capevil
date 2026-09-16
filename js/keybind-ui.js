@@ -28,31 +28,35 @@ function openKeybindModal() {
   function renderSection(player, title) {
     const binds = bindsFor(player);
     return `
-      <div class="section-title" style="margin-top:14px;">${title}</div>
-      <div class="keybind-list">
-        ${ACTIONS.map((a) => {
-          const active = listeningFor && listeningFor.player === player && listeningFor.action === a;
-          return `
-          <div class="keybind-row">
-            <span>${ACTION_LABELS[a]}</span>
-            <button class="btn small ${active ? 'accent' : ''}" data-rebind="${a}" data-player="${player}">
-              ${active ? 'Appuie sur une touche…' : codeLabel(binds[a])}
-            </button>
-          </div>`;
-        }).join('')}
-      </div>
-      <button class="btn small" data-reset-player="${player}" style="margin-top:6px;">↺ Réinitialiser joueur ${player}</button>`;
+      <div>
+        <div class="section-title" style="margin-top:14px;">${title}</div>
+        <div class="keybind-list">
+          ${ACTIONS.map((a) => {
+            const active = listeningFor && listeningFor.player === player && listeningFor.action === a;
+            return `
+            <div class="keybind-row">
+              <span>${ACTION_LABELS[a]}</span>
+              <button class="btn small ${active ? 'accent' : ''}" data-rebind="${a}" data-player="${player}">
+                ${active ? 'Appuie sur une touche…' : codeLabel(binds[a])}
+              </button>
+            </div>`;
+          }).join('')}
+        </div>
+        <button class="btn small" data-reset-player="${player}" style="margin-top:6px;">↺ Réinitialiser joueur ${player}</button>
+      </div>`;
   }
 
   function draw() {
     root.innerHTML = `
       <div class="modal-backdrop" id="kb-backdrop">
-        <div class="modal-box" role="dialog" aria-modal="true">
+        <div class="modal-box modal-wide" role="dialog" aria-modal="true">
           <button class="modal-close" id="kb-close" aria-label="Fermer">✕</button>
           <h2>⌨ Touches</h2>
           <p class="muted" style="margin-top:-8px;">Clique « Modifier » puis appuie sur la touche voulue. Le joueur 2 ne sert que sur un niveau à 2 joueurs.</p>
-          ${renderSection(1, '🧍 Joueur 1')}
-          ${renderSection(2, '🧍 Joueur 2')}
+          <div class="modal-cols-2">
+            ${renderSection(1, '🧍 Joueur 1')}
+            ${renderSection(2, '🧍 Joueur 2')}
+          </div>
           <div style="display:flex;gap:8px;margin-top:16px;">
             <button class="btn small primary" id="kb-done" style="flex:1;">Terminé</button>
           </div>

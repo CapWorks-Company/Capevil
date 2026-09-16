@@ -7,6 +7,7 @@ import { mountKeybindButton } from './keybind-ui.js';
 import { showToast, promptModal } from './ui-kit.js';
 import { mountAudioButton } from './audio-ui.js';
 import { discoverCampaignLevels, cloneCampaignLevel, isUnlocked, markCompleted } from './campaign.js';
+import { CELL, GAME_VIEWPORT_MAX } from './constants.js';
 
 const canvas = document.getElementById('stage');
 const deathsEl = document.getElementById('deaths');
@@ -23,14 +24,17 @@ const winNextBtn = document.getElementById('win-next-level');
 const loadError = document.getElementById('load-error');
 const accountBarEl = document.getElementById('account-bar');
 
-function fitCanvas() {
-  const maxW = Math.min(1000, window.innerWidth - 32);
-  const ratio = 560 / 1000;
-  canvas.width = maxW;
-  canvas.height = Math.round(maxW * ratio);
+// The canvas is sized to exactly match the level's own grid (cols/rows *
+// CELL) — no empty letterboxed space around a small level — capped at
+// GAME_VIEWPORT_MAX for a big one (beyond that the camera scrolls/follows
+// the player instead of shrinking the world; see engine.js's
+// _updateCamera). A narrow browser window still scales the whole canvas
+// down visually via the `max-width:100%` CSS rule on #stage, without
+// touching this buffer size or the gameplay coordinate space at all.
+function sizeCanvasToLevel(level) {
+  canvas.width = Math.min(level.cols * CELL, GAME_VIEWPORT_MAX.w);
+  canvas.height = Math.min(level.rows * CELL, GAME_VIEWPORT_MAX.h);
 }
-fitCanvas();
-window.addEventListener('resize', fitCanvas);
 
 const params = new URLSearchParams(location.search);
 const remoteId = params.get('id');
@@ -123,6 +127,7 @@ reportBtn.addEventListener('click', async () => {
 loadLevel().then((level) => {
   titleEl.textContent = level.title || 'Niveau';
   authorEl.textContent = level.author ? `par ${level.author}` : '';
+  sizeCanvasToLevel(level);
 
   engine = new Engine(canvas, level, {
     onDeath: () => {

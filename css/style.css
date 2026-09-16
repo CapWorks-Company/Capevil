@@ -483,6 +483,15 @@ canvas#stage {
   box-shadow: 0 24px 70px rgba(0,0,0,0.55);
   animation: modalPopIn .18s cubic-bezier(.2,.9,.3,1.2);
 }
+/* Wider variant for modals with side-by-side content (e.g. the ⌨ Touches
+   modal's Joueur 1 / Joueur 2 columns) instead of the default single-column
+   width. */
+.modal-box.modal-wide { max-width: 640px; }
+/* Two side-by-side sections sharing a modal — e.g. Joueur 1 / Joueur 2 in
+   the keybind modal — stacked back into one column on narrow screens. */
+.modal-cols-2 { display: flex; gap: 24px; }
+.modal-cols-2 > div { flex: 1; min-width: 0; }
+@media (max-width: 560px) { .modal-cols-2 { flex-direction: column; gap: 0; } }
 .modal-box h2 { margin: 0 0 6px; font-size: 20px; }
 .modal-close {
   position: absolute; top: 10px; right: 10px; background: transparent; border: none;

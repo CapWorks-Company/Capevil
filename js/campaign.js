@@ -1,14 +1,14 @@
 // The built-in "🗺️ Aventure" level sequence — Capevil's own official campaign,
 // separate from the community/admin-approved levels in Supabase.
 //
-// Workflow: Caroline builds a level in the editor, titles it "Niveau_N" (the
+// Workflow: Caroline builds a level in the editor, titles it "Niveau N" (the
 // title box at the top of the editor — this is also what names the download,
 // see editor.js's #export-json), exports it with ⭳ Exporter JSON, and drops
 // the file straight into the levels/ folder at the project root, next to
 // index.html. Nothing else ever needs to change: discoverCampaignLevels()
-// below finds levels/Niveau_1.json, levels/Niveau_2.json, … automatically at
+// below finds levels/Niveau 1.json, levels/Niveau 2.json, … automatically at
 // load time by probing sequential numbers until one is missing. No manifest
-// file, no code edits, ever — dropping in Niveau_2.json is the entire job.
+// file, no code edits, ever — dropping in Niveau 2.json is the entire job.
 import { deserializeLevel, cloneLevel } from './level-model.js';
 
 // Memoized: every caller on a given page load (home.js, game.js) shares one
@@ -26,7 +26,10 @@ async function probeAll() {
   // keeps answering 200 forever (e.g. a misconfigured server) — not a real
   // ceiling on campaign length.
   for (let n = 1; n <= 500; n++) {
-    const file = `levels/Niveau_${n}.json`;
+    // The on-disk filename has a plain space ("Niveau 1.json"), so it's
+    // encoded here for the actual fetch — the space itself is what the
+    // README tells Caroline to type as the level's title, no underscore.
+    const file = `levels/${encodeURIComponent(`Niveau ${n}`)}.json`;
     let res;
     try {
       res = await fetch(file, { cache: 'no-store' });
@@ -34,7 +37,7 @@ async function probeAll() {
       break; // offline / network hiccup — stop rather than report a false gap
     }
     if (!res.ok) break; // first missing number ends the sequence: no "holes" —
-                         // levels are always Niveau_1, Niveau_2, Niveau_3, one after another.
+                         // levels are always Niveau 1, Niveau 2, Niveau 3, one after another.
     try {
       const raw = await res.json();
       found.push({ index: found.length, file, level: deserializeLevel(raw) });

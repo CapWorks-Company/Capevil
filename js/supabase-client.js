@@ -29,6 +29,17 @@ export async function isBackendReady() {
   return IS_CONFIGURED;
 }
 
+// Distinct from isBackendReady(): that one only checks the static config
+// (URL/key look filled in), this one actually confirms the Supabase SDK
+// loaded — the one thing that can still fail even when configured (the CDN
+// fetch itself, see getClient() above: no connectivity, a blocked CDN, an
+// ad/script blocker). Used to bypass the editor's login gate (see editor.js)
+// rather than permanently locking everyone out of building levels the
+// moment that one fetch has a bad day.
+export async function canSignIn() {
+  return !!(await getClient());
+}
+
 // ---------------------------------------------------------------- accounts
 // There is no separate "admin" role: any signed-in account can approve
 // levels (see sql/schema.sql). Regular accounts exist so players can publish

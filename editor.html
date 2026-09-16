@@ -25,6 +25,16 @@
     <div id="account-bar"></div>
   </div>
 
+  <div id="auth-gate" class="container narrow hidden" style="padding-top:40px;">
+    <div class="card" style="text-align:center;">
+      <h2>🔒 Connecte-toi pour créer un niveau</h2>
+      <p class="muted">Un compte est nécessaire pour construire un niveau, comme ça ta progression est toujours
+        rattachée à ton compte plutôt qu'à ce seul navigateur.</p>
+      <div id="auth-gate-bar" style="display:flex;justify-content:center;margin-top:14px;"></div>
+    </div>
+  </div>
+
+  <div id="editor-main" class="hidden">
   <div class="topbar topbar-sub">
     <nav>
       <button class="btn small" id="new-level">Nouveau</button>
@@ -122,6 +132,7 @@
       </div>
       <div id="props"></div>
     </div>
+  </div>
   </div>
 
   <script type="module" src="js/editor.js"></script>

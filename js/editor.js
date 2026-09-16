@@ -13,7 +13,7 @@ import {
 import { buildSampleLevel } from './sample-level.js';
 import { Engine } from './engine.js';
 import { saveLocalDraft, loadLocalDraft } from './local-storage.js';
-import { publishLevel, updateOwnLevel, getLevel, isBackendReady, getSession, getMyProfile } from './supabase-client.js';
+import { publishLevel, updateOwnLevel, getLevel, isBackendReady, getSession, getMyProfile, canSignIn } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
 import { mountAudioButton } from './audio-ui.js';
@@ -62,6 +62,7 @@ let testEngine = null;
 let session = null;       // current Supabase Auth session, kept in sync via onAuthChange
 let editingRemoteId = null; // set when this editor session is editing an already-published level
 let previewMode = false;  // read-only admin preview: full editor view, nothing can be changed/saved
+let authGateBypass = false; // true once canSignIn() comes back false (Supabase unreachable) — see updateAuthGate
 let showCoordOverlay = false; // true while a "Téléporter un élément" action's x/y field has focus
 let blockViewIds = new Set(); // entity ids currently showing their actions as "blocs" (see renderActionBlock) instead of the compact list
 let bottomTab = 'hierarchy'; // 'hierarchy' | 'actions' — which panel occupies the shared slot below the canvas
@@ -98,6 +99,8 @@ const colsInput = document.getElementById('cols-input');
 const rowsInput = document.getElementById('rows-input');
 const worldGravityInput = document.getElementById('ws-gravity');
 const worldBgInput = document.getElementById('ws-bg');
+const authGateEl = document.getElementById('auth-gate');
+const editorMainEl = document.getElementById('editor-main');
 const ceilingGlitchInput = document.getElementById('ws-ceiling-glitch');
 const statusEl = document.getElementById('status-msg');
 const pickBanner = document.getElementById('pick-banner');
@@ -274,12 +277,41 @@ async function init() {
         session = s;
         await syncAuthorField();
         updatePublishButtonState();
+        updateAuthGate();
       },
     });
   } else {
     session = await getSession();
     await syncAuthorField();
   }
+  // A second, identical account widget inside the gate card itself — signing
+  // in there (or in the topbar one, they're both wired to the same Supabase
+  // auth state) reveals the builder via the onChange callback above.
+  const authGateBar = document.getElementById('auth-gate-bar');
+  if (authGateBar) mountAccountBar(authGateBar);
+  // If the Supabase client itself can't be reached (network hiccup, blocked
+  // CDN — see canSignIn()'s own comment), signing in isn't actually possible
+  // right now: bypass the gate rather than permanently locking everyone out
+  // of building levels over a transient failure that has nothing to do with
+  // whether they have an account.
+  authGateBypass = !(await canSignIn());
+  updateAuthGate();
+}
+
+// Building a level requires an account — signed out, the whole builder stays
+// behind #auth-gate (see the card in editor.html) instead of just gating the
+// "🚀 Publier" button like before, so a level Caroline builds is never only
+// sitting in this one browser's local storage: it's tied to her account from
+// the very first entity she places. The admin-only read-only preview
+// (?preview=, see init()) is exempt — it never lets you change anything
+// regardless of session, so there's nothing here that needs protecting. Also
+// bypassed when Supabase itself is unreachable (authGateBypass) — see the
+// canSignIn() call above.
+function updateAuthGate() {
+  if (!authGateEl || !editorMainEl) return;
+  const show = previewMode || !!session || authGateBypass;
+  authGateEl.classList.toggle('hidden', show);
+  editorMainEl.classList.toggle('hidden', !show);
 }
 
 // The author name is always the signed-in account's display name — never a
@@ -1939,7 +1971,11 @@ function bindToolbar() {
     const blob = new Blob([JSON.stringify(level, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${(level.title || 'niveau').replace(/\s+/g, '_')}.json`;
+    // The downloaded filename follows the title as typed (spaces kept, e.g.
+    // "Niveau 1" -> "Niveau 1.json") — only characters an OS actually
+    // rejects in a filename get swapped out.
+    const safeName = (level.title || 'niveau').trim().replace(/[\\/:*?"<>|]+/g, '_');
+    a.download = `${safeName}.json`;
     a.click();
     showToast('Fichier JSON téléchargé ✓', { type: 'success' });
   });
