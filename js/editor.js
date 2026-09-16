@@ -72,6 +72,18 @@ let lastActionsEntityId = null; // last entity id renderActionsPanel ran for —
                                  // back to 'press' whenever the selection changes to a different entity.
 let hiddenLayers = new Set(); // `layer` values currently toggled off in the layers panel — a view filter only,
                                // never saved with the level and never touched by anything but that panel.
+let editRealView = false; // "🎬 Voir le jeu" — read-only static preview of exactly what the real game
+                           // renders (no grid/trigger zones/invisible entities/edit-only dimming), toggled
+                           // straight from the edit canvas, no playtest needed — see render()/handleCellClick.
+let propsTab = 'actions'; // 'general' | 'actions' | 'activation' — for TRIGGER/BUTTON/PLATE only, which of the
+                           // props panel's tabs is showing (see renderPropsTabBar). Defaults to "Actions" — what
+                           // these three exist for, and what used to sit immediately visible right below Général
+                           // before this tab split — not "Général", so selecting one still lands you straight on
+                           // its action list exactly like before. Other entity types have too little to configure
+                           // to need tabs at all and keep a single flat panel.
+let lastPropsTabEntityId = null; // last entity id renderProps ran the tab logic for — resets propsTab back to
+                                  // 'general' whenever the selection changes to a different entity (staying on
+                                  // the SAME entity, e.g. after an edit, preserves whichever tab was open).
 
 const canvas = document.getElementById('stage');
 const ctx = canvas.getContext('2d');
@@ -377,48 +389,65 @@ function render() {
   if (playtesting) return;
   ctx.fillStyle = level.background || '#1b1e2b';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-  for (let c = 0; c <= level.cols; c++) { ctx.beginPath(); ctx.moveTo(c * CELL, 0); ctx.lineTo(c * CELL, canvas.height); ctx.stroke(); }
-  for (let r = 0; r <= level.rows; r++) { ctx.beginPath(); ctx.moveTo(0, r * CELL); ctx.lineTo(canvas.width, r * CELL); ctx.stroke(); }
+  // "🎬 Voir le jeu" (editRealView) swaps the canvas to exactly what the real
+  // game shows — same rule the playtest engine uses for its own debug/real
+  // toggle (see engine.js's debugTriggers): no grid, no trigger zones, no
+  // invisible entities, no dimming for passable/harmless (those never change
+  // an entity's look in real play — see engine.js's _renderEntity). It's a
+  // read-only preview: handleCellClick bails out immediately while it's on.
+  if (!editRealView) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+    for (let c = 0; c <= level.cols; c++) { ctx.beginPath(); ctx.moveTo(c * CELL, 0); ctx.lineTo(c * CELL, canvas.height); ctx.stroke(); }
+    for (let r = 0; r <= level.rows; r++) { ctx.beginPath(); ctx.moveTo(0, r * CELL); ctx.lineTo(canvas.width, r * CELL); ctx.stroke(); }
+  }
 
   // Same purely-cosmetic layer split as the real game engine (see engine.js's
   // render()): layer<=0 entities draw behind the player-start marker,
   // layer>0 in front of it — a stable sort keeps layer-0 entities in their
   // original order so an untouched level looks exactly as before.
   const layerSorted = [...level.entities].sort((a, b) => (a.layer || 0) - (b.layer || 0));
-  for (const ent of layerSorted) { if ((ent.layer || 0) <= 0 && !isHiddenEntity(ent)) drawEntity(ent); }
-  drawTriggerLinks();
-  if (showCoordOverlay) drawCoordOverlay();
+  // A TRIGGER zone is invisible in real play, same as anything explicitly
+  // flagged invisible (engine.js's _renderEntity/TRIGGER render case).
+  const visibleInView = (ent) => !isHiddenEntity(ent) && !(editRealView && (ent.invisible || ent.type === ENTITY_TYPES.TRIGGER));
+  for (const ent of layerSorted) { if ((ent.layer || 0) <= 0 && visibleInView(ent)) drawEntity(ent); }
+  if (!editRealView) drawTriggerLinks();
+  if (!editRealView && showCoordOverlay) drawCoordOverlay();
 
   // player start marker(s) — player 2's uses the same blue as its in-game
   // sprite (see engine.js's _renderPlayer) so the two are never confused.
+  // An invisible spawn draws nothing at all in real view (no 👻 hint either
+  // — that hint is itself an edit-only aid for something real play hides).
   const ps = level.playerStart;
-  ctx.fillStyle = 'rgba(247,127,0,0.85)';
-  ctx.fillRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
-  ctx.strokeStyle = '#fff'; ctx.strokeRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
-  if (ps.invisible) { ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('👻', ps.x * CELL + CELL / 2, ps.y * CELL + CELL / 2 + 4); }
+  if (!(editRealView && ps.invisible)) {
+    ctx.fillStyle = 'rgba(247,127,0,0.85)';
+    ctx.fillRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
+    ctx.strokeStyle = '#fff'; ctx.strokeRect(ps.x * CELL + 6, ps.y * CELL + 6, CELL - 12, CELL - 12);
+    if (ps.invisible && !editRealView) { ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('👻', ps.x * CELL + CELL / 2, ps.y * CELL + CELL / 2 + 4); }
+  }
   const ps2 = level.playerStart2;
-  if (ps2) {
+  if (ps2 && !(editRealView && ps2.invisible)) {
     ctx.fillStyle = 'rgba(46,196,255,0.85)';
     ctx.fillRect(ps2.x * CELL + 6, ps2.y * CELL + 6, CELL - 12, CELL - 12);
     ctx.strokeStyle = '#fff'; ctx.strokeRect(ps2.x * CELL + 6, ps2.y * CELL + 6, CELL - 12, CELL - 12);
-    if (ps2.invisible) { ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('👻', ps2.x * CELL + CELL / 2, ps2.y * CELL + CELL / 2 + 4); }
+    if (ps2.invisible && !editRealView) { ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('👻', ps2.x * CELL + CELL / 2, ps2.y * CELL + CELL / 2 + 4); }
   }
 
-  for (const ent of layerSorted) { if ((ent.layer || 0) > 0 && !isHiddenEntity(ent)) drawEntity(ent); }
+  for (const ent of layerSorted) { if ((ent.layer || 0) > 0 && visibleInView(ent)) drawEntity(ent); }
 
-  if (selectedId === 'playerstart') {
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
-    ctx.strokeRect(ps.x * CELL - 2, ps.y * CELL - 2, CELL + 4, CELL + 4);
-  } else if (selectedId === 'playerstart2' && ps2) {
-    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
-    ctx.strokeRect(ps2.x * CELL - 2, ps2.y * CELL - 2, CELL + 4, CELL + 4);
-  } else if (selectedId) {
-    const ent = findEntity(level, selectedId);
-    if (ent && !isHiddenEntity(ent)) {
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(ent.x * CELL - 2, ent.y * CELL - 2, ent.w * CELL + 4, ent.h * CELL + 4);
+  if (!editRealView) {
+    if (selectedId === 'playerstart') {
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+      ctx.strokeRect(ps.x * CELL - 2, ps.y * CELL - 2, CELL + 4, CELL + 4);
+    } else if (selectedId === 'playerstart2' && ps2) {
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+      ctx.strokeRect(ps2.x * CELL - 2, ps2.y * CELL - 2, CELL + 4, CELL + 4);
+    } else if (selectedId) {
+      const ent = findEntity(level, selectedId);
+      if (ent && !isHiddenEntity(ent)) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(ent.x * CELL - 2, ent.y * CELL - 2, ent.w * CELL + 4, ent.h * CELL + 4);
+      }
     }
   }
   renderBottomPanel();
@@ -506,7 +535,7 @@ function renderActionsPanel() {
   // A PLATE gets two little sub-tabs (its press list and its separate
   // release list); TRIGGER/BUTTON only ever have the one list, no sub-tabs.
   const subTabsHtml = isPlate ? `
-    <div class="ap-subtabs">
+    <div class="subtabs">
       <button type="button" class="btn small${onRelease ? '' : ' active'}" id="ap-tab-press">⬇️ Appui</button>
       <button type="button" class="btn small${onRelease ? ' active' : ''}" id="ap-tab-release">⬆️ Relâchement</button>
     </div>` : '';
@@ -805,7 +834,12 @@ function drawLink(x1, y1, x2, y2) {
 function drawEntity(ent) {
   const x = ent.x * CELL, y = ent.y * CELL, w = ent.w * CELL, h = ent.h * CELL;
   ctx.save();
-  if (ent.passable || ent.invisible) ctx.globalAlpha = 0.55;
+  // passable/invisible dimming is an edit-only hint — real play never dims
+  // or recolors for these toggles (see engine.js's _renderEntity comment);
+  // an invisible entity is filtered out of drawEntity entirely in real view
+  // (see render()'s visibleInView), so this dimming would never even apply
+  // to it there, but skipping it for passable too keeps the two consistent.
+  if ((ent.passable || ent.invisible) && !editRealView) ctx.globalAlpha = 0.55;
   switch (ent.type) {
     case ENTITY_TYPES.BLOCK: ctx.fillStyle = '#111319'; ctx.fillRect(x, y, w, h); ctx.strokeStyle = '#3a3f52'; ctx.strokeRect(x + 1, y + 1, w - 2, h - 2); break;
     case ENTITY_TYPES.CRATE:
@@ -817,7 +851,11 @@ function drawEntity(ent) {
       ctx.stroke();
       break;
     case ENTITY_TYPES.SPIKE: {
-      ctx.fillStyle = ent.harmless ? '#5b6b7a' : '#e63946';
+      // "harmless" never recolors in real play (see engine.js's comment by
+      // _renderEntity) — a harmless spike still LOOKS dangerous there, on
+      // purpose. The gray-out is purely an edit-mode hint, suppressed here
+      // too in real view.
+      ctx.fillStyle = (ent.harmless && !editRealView) ? '#5b6b7a' : '#e63946';
       const facing = ent.props.facing || 'up';
       if (facing === 'up' || facing === 'down') {
         for (let i = 0; i < ent.w; i++) {
@@ -848,7 +886,7 @@ function drawEntity(ent) {
       ctx.fillText({ up: '↑', down: '↓', left: '←', right: '→' }[ent.props.direction || 'right'], x + w / 2, y + h / 2 + 5);
       break;
     case ENTITY_TYPES.SPINNER:
-      ctx.fillStyle = ent.harmless ? '#5b6b7a' : '#c9184a'; ctx.beginPath(); ctx.arc(x + w / 2, y + h / 2, CELL * 0.4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = (ent.harmless && !editRealView) ? '#5b6b7a' : '#c9184a'; ctx.beginPath(); ctx.arc(x + w / 2, y + h / 2, CELL * 0.4, 0, Math.PI * 2); ctx.fill();
       break;
     case ENTITY_TYPES.TELEPORTER: {
       const freq = ent.props.frequency || 1;
@@ -956,6 +994,10 @@ function entityAt(cx, cy) {
 }
 
 function handleCellClick(cx, cy) {
+  // "🎬 Voir le jeu": a pure visual preview, not a selection tool like
+  // previewMode below — clicking the canvas does nothing at all while it's
+  // on (see toggleEditRealView to leave it).
+  if (editRealView) return;
   if (previewMode) {
     // View-only: clicking only ever selects (to inspect props), never
     // moves/places/erases anything.
@@ -1086,97 +1128,123 @@ function renderProps() {
   const ent = findEntity(level, selectedId);
   if (!ent) { selectedId = null; return renderProps(); }
 
+  // TRIGGER/BUTTON/PLATE carry enough settings (an action list, plus a whole
+  // card of activation timing/repeat options) that stacking it all in one
+  // flat panel got overwhelming — these three alone get a Général/Actions/
+  // Activation tab bar (see renderPropsTabBar) so only one concern shows at
+  // a time. Every other type has little enough to configure that a single
+  // flat panel (the pre-existing layout) stays the simplest option.
+  const isTabbedType = ent.type === ENTITY_TYPES.TRIGGER || ent.type === ENTITY_TYPES.BUTTON || ent.type === ENTITY_TYPES.PLATE;
+  if (isTabbedType) {
+    // Switching to a different entity always lands back on "Actions" — only
+    // staying on the SAME entity (e.g. after editing a field) preserves
+    // whichever tab was open, exactly like the Actions panel's own press/
+    // release sub-tabs (actionsPanelTarget) do.
+    if (ent.id !== lastPropsTabEntityId) { propsTab = 'actions'; lastPropsTabEntityId = ent.id; }
+  } else {
+    lastPropsTabEntityId = null;
+  }
+
   const html = [];
   html.push(`<div class="props-header"><h3>Propriétés</h3><div class="pill type-badge">${paletteLabel(ent.type)}</div></div>`);
-  html.push('<div class="props-panel">');
-  html.push(`<label>Position (colonne / ligne)</label>
-    <div class="row">
-      <input type="number" id="p-x" value="${ent.x}" min="0" max="${level.cols - 1}" />
-      <input type="number" id="p-y" value="${ent.y}" min="0" max="${level.rows - 1}" />
-    </div>`);
+  if (isTabbedType) html.push(renderPropsTabBar());
 
-  // A checkpoint's flag is always drawn at the same fixed size, so the size
-  // fields don't apply to it — every other type (BLOCK included: solid
-  // blocks are placed one cell at a time, but resizable afterward here,
-  // just like a crate) gets them.
-  if (ent.type !== ENTITY_TYPES.CHECKPOINT) {
-    html.push(`<label>Taille (largeur / hauteur en cases)</label>
+  if (!isTabbedType || propsTab === 'general') {
+    html.push('<div class="props-panel">');
+    html.push(`<label>Position (colonne / ligne)</label>
       <div class="row">
-        <input type="number" id="p-w" value="${ent.w}" min="1" max="${level.cols}" />
-        <input type="number" id="p-h" value="${ent.h}" min="1" max="${level.rows}" />
+        <input type="number" id="p-x" value="${ent.x}" min="0" max="${level.cols - 1}" />
+        <input type="number" id="p-y" value="${ent.y}" min="0" max="${level.rows - 1}" />
       </div>`);
+
+    // A checkpoint's flag is always drawn at the same fixed size, so the size
+    // fields don't apply to it — every other type (BLOCK included: solid
+    // blocks are placed one cell at a time, but resizable afterward here,
+    // just like a crate) gets them.
+    if (ent.type !== ENTITY_TYPES.CHECKPOINT) {
+      html.push(`<label>Taille (largeur / hauteur en cases)</label>
+        <div class="row">
+          <input type="number" id="p-w" value="${ent.w}" min="1" max="${level.cols}" />
+          <input type="number" id="p-h" value="${ent.h}" min="1" max="${level.rows}" />
+        </div>`);
+    }
+
+    const layerCurrent = clampLayer(ent.layer ?? 0);
+    html.push(fieldGroup('Affichage', `
+      <label>Couche (superposition visuelle)</label>
+      <input type="number" id="p-layer" value="${layerCurrent}" min="${LAYER_MIN}" max="${LAYER_MAX}" step="1" />
+      <p class="hint">0 = normal (par défaut). Négatif = plus en arrière-plan, positif = plus au premier plan — devant ou derrière le joueur selon le signe. Change seulement l'ordre d'affichage : quelle que soit la couche, cet élément continue d'interagir normalement avec le joueur (collisions, dangers, actions...). Utilise le panneau « Hiérarchie » pour voir et sélectionner les éléments par couche.</p>`));
+
+    const toggles = togglesForType(ent.type);
+    if (toggles.length) {
+      const rows = toggles.map(t => `<label class="toggle-row"><input type="checkbox" data-toggle="${t}" ${ent[t] ? 'checked' : ''} />${TOGGLE_LABELS[t]}</label>`).join('');
+      html.push(fieldGroup('État', `<div class="toggle-list">${rows}</div>`));
+    }
+
+    if (ent.type === ENTITY_TYPES.SPIKE || ent.type === ENTITY_TYPES.BUTTON || ent.type === ENTITY_TYPES.PLATE) {
+      html.push(fieldGroup('Orientation', `
+        ${selectHtml('p-facing', FACING_LABELS, ent.props.facing || 'up')}
+        ${ent.type !== ENTITY_TYPES.SPIKE ? '<p class="hint">Purement visuel (comme pour la pointe) : ça ne change pas où il faut marcher/appuyer pour l\'activer.</p>' : ''}`));
+    }
+    if (ent.type === ENTITY_TYPES.SPRING) {
+      html.push(fieldGroup('Ressort', `
+        <label>Direction (haut / bas uniquement)</label>
+        ${selectHtml('p-dir', { up: GRAVITY_LABELS.up, down: GRAVITY_LABELS.down }, ent.props.direction || 'up')}
+        <label>Puissance (x saut normal)</label>
+        <input type="number" id="p-power" value="${ent.props.power ?? 1.6}" step="0.1" min="0.2" max="5" />`));
+    }
+    if (ent.type === ENTITY_TYPES.FAN) {
+      html.push(fieldGroup('Ventilateur', `
+        <label>Direction du vent</label>
+        ${selectHtml('p-fandir', GRAVITY_LABELS, ent.props.direction || 'right')}
+        <label>Force du vent</label>
+        <input type="number" id="p-force" value="${ent.props.force ?? 1}" step="0.1" min="0.1" max="4" />
+        <label>Portée (nombre de cases touchées par l'air)</label>
+        <input type="number" id="p-range" value="${ent.props.range ?? 5}" step="1" min="0" max="40" />
+        <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-falloff" ${ent.props.falloff ? 'checked' : ''} />Diminution en fonction de la distance</label>
+        <p class="hint">Ex. avec une portée de 5 cases, un joueur à 4 cases est encore propulsé ; au-delà de 5, plus rien.</p>`));
+    }
+    if (ent.type === ENTITY_TYPES.SPINNER) {
+      html.push(fieldGroup('Rotation', `
+        <label>Vitesse de rotation</label>
+        <input type="number" id="p-speed" value="${ent.props.speed ?? 2}" step="0.1" min="0.1" max="10" />
+        <label>Sens de rotation</label>
+        ${selectHtml('p-spin-direction', { cw: 'Horaire', ccw: 'Antihoraire' }, ent.props.direction || 'cw')}`));
+    }
+    if (ent.type === ENTITY_TYPES.CRATE) {
+      html.push(fieldGroup('Cube poussable', `
+        <label>Gravité (x normal, négatif = flotte vers le haut)</label>
+        <input type="number" id="p-crate-gravity" value="${ent.props.gravity ?? 1}" step="0.1" min="-5" max="5" />
+        <p class="hint">Se combine avec la gravité du monde (« Condition du monde ») : si les deux sont négatives (ou les deux positives), le cube tombe normalement ; si un seul des deux l'est, il flotte vers le haut. 0 = insensible à la gravité.</p>
+        <label>Difficulté à pousser</label>
+        <input type="number" id="p-crate-pushdiff" value="${ent.props.pushDifficulty ?? 1}" step="0.1" min="0.1" max="10" />
+        <p class="hint">1 = normal (suit le joueur sans résistance). Plus haut = plus lourd, il traîne derrière le joueur qui le pousse.</p>`));
+    }
+    if (ent.type === ENTITY_TYPES.TELEPORTER) {
+      const freqLabels = {};
+      for (const f of TELEPORTER_FREQUENCIES) freqLabels[f] = `Fréquence ${f} (${teleporterGroupCount(f, ent.id)}/${TELEPORTER_MAX_PER_FREQUENCY})`;
+      html.push(fieldGroup('Téléportation', `
+        <label>Fréquence (relie les téléporteurs, max 3 par fréquence)</label>
+        ${selectHtml('p-freq', freqLabels, ent.props.frequency || 1)}
+        <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-oneuse" ${ent.props.oneUse ? 'checked' : ''} />Sens unique (utilisable une seule fois)</label>
+        <p class="hint">S'applique à toute la fréquence : les téléporteurs liés deviennent tous « sens unique » ensemble, et l'aller-retour est impossible une fois emprunté.</p>`));
+    }
+    html.push('</div>');
   }
 
-  const layerCurrent = clampLayer(ent.layer ?? 0);
-  html.push(fieldGroup('Affichage', `
-    <label>Couche (superposition visuelle)</label>
-    <input type="number" id="p-layer" value="${layerCurrent}" min="${LAYER_MIN}" max="${LAYER_MAX}" step="1" />
-    <p class="hint">0 = normal (par défaut). Négatif = plus en arrière-plan, positif = plus au premier plan — devant ou derrière le joueur selon le signe. Change seulement l'ordre d'affichage : quelle que soit la couche, cet élément continue d'interagir normalement avec le joueur (collisions, dangers, actions...). Utilise le panneau « Hiérarchie » pour voir et sélectionner les éléments par couche.</p>`));
-
-  const toggles = togglesForType(ent.type);
-  if (toggles.length) {
-    const rows = toggles.map(t => `<label class="toggle-row"><input type="checkbox" data-toggle="${t}" ${ent[t] ? 'checked' : ''} />${TOGGLE_LABELS[t]}</label>`).join('');
-    html.push(fieldGroup('État', `<div class="toggle-list">${rows}</div>`));
+  if (isTabbedType) {
+    const parts = ent.type === ENTITY_TYPES.TRIGGER ? renderTriggerEditor(ent)
+      : ent.type === ENTITY_TYPES.BUTTON ? renderButtonEditor(ent)
+      : renderPlateEditor(ent);
+    if (propsTab === 'actions') html.push(parts.actions);
+    else if (propsTab === 'activation') html.push(parts.activation);
   }
 
-  if (ent.type === ENTITY_TYPES.SPIKE || ent.type === ENTITY_TYPES.BUTTON || ent.type === ENTITY_TYPES.PLATE) {
-    html.push(fieldGroup('Orientation', `
-      ${selectHtml('p-facing', FACING_LABELS, ent.props.facing || 'up')}
-      ${ent.type !== ENTITY_TYPES.SPIKE ? '<p class="hint">Purement visuel (comme pour la pointe) : ça ne change pas où il faut marcher/appuyer pour l\'activer.</p>' : ''}`));
-  }
-  if (ent.type === ENTITY_TYPES.SPRING) {
-    html.push(fieldGroup('Ressort', `
-      <label>Direction (haut / bas uniquement)</label>
-      ${selectHtml('p-dir', { up: GRAVITY_LABELS.up, down: GRAVITY_LABELS.down }, ent.props.direction || 'up')}
-      <label>Puissance (x saut normal)</label>
-      <input type="number" id="p-power" value="${ent.props.power ?? 1.6}" step="0.1" min="0.2" max="5" />`));
-  }
-  if (ent.type === ENTITY_TYPES.FAN) {
-    html.push(fieldGroup('Ventilateur', `
-      <label>Direction du vent</label>
-      ${selectHtml('p-fandir', GRAVITY_LABELS, ent.props.direction || 'right')}
-      <label>Force du vent</label>
-      <input type="number" id="p-force" value="${ent.props.force ?? 1}" step="0.1" min="0.1" max="4" />
-      <label>Portée (nombre de cases touchées par l'air)</label>
-      <input type="number" id="p-range" value="${ent.props.range ?? 5}" step="1" min="0" max="40" />
-      <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-falloff" ${ent.props.falloff ? 'checked' : ''} />Diminution en fonction de la distance</label>
-      <p class="hint">Ex. avec une portée de 5 cases, un joueur à 4 cases est encore propulsé ; au-delà de 5, plus rien.</p>`));
-  }
-  if (ent.type === ENTITY_TYPES.SPINNER) {
-    html.push(fieldGroup('Rotation', `
-      <label>Vitesse de rotation</label>
-      <input type="number" id="p-speed" value="${ent.props.speed ?? 2}" step="0.1" min="0.1" max="10" />
-      <label>Sens de rotation</label>
-      ${selectHtml('p-spin-direction', { cw: 'Horaire', ccw: 'Antihoraire' }, ent.props.direction || 'cw')}`));
-  }
-  if (ent.type === ENTITY_TYPES.CRATE) {
-    html.push(fieldGroup('Cube poussable', `
-      <label>Gravité (x normal, négatif = flotte vers le haut)</label>
-      <input type="number" id="p-crate-gravity" value="${ent.props.gravity ?? 1}" step="0.1" min="-5" max="5" />
-      <p class="hint">Se combine avec la gravité du monde (« Condition du monde ») : si les deux sont négatives (ou les deux positives), le cube tombe normalement ; si un seul des deux l'est, il flotte vers le haut. 0 = insensible à la gravité.</p>
-      <label>Difficulté à pousser</label>
-      <input type="number" id="p-crate-pushdiff" value="${ent.props.pushDifficulty ?? 1}" step="0.1" min="0.1" max="10" />
-      <p class="hint">1 = normal (suit le joueur sans résistance). Plus haut = plus lourd, il traîne derrière le joueur qui le pousse.</p>`));
-  }
-  if (ent.type === ENTITY_TYPES.TELEPORTER) {
-    const freqLabels = {};
-    for (const f of TELEPORTER_FREQUENCIES) freqLabels[f] = `Fréquence ${f} (${teleporterGroupCount(f, ent.id)}/${TELEPORTER_MAX_PER_FREQUENCY})`;
-    html.push(fieldGroup('Téléportation', `
-      <label>Fréquence (relie les téléporteurs, max 3 par fréquence)</label>
-      ${selectHtml('p-freq', freqLabels, ent.props.frequency || 1)}
-      <label class="toggle-row" style="margin-top:10px;"><input type="checkbox" id="p-oneuse" ${ent.props.oneUse ? 'checked' : ''} />Sens unique (utilisable une seule fois)</label>
-      <p class="hint">S'applique à toute la fréquence : les téléporteurs liés deviennent tous « sens unique » ensemble, et l'aller-retour est impossible une fois emprunté.</p>`));
-  }
-
-  html.push('<button class="btn danger small" id="delete-ent" style="margin-top:4px;width:100%;">Supprimer cet élément</button>');
-  html.push('</div>');
-
-  if (ent.type === ENTITY_TYPES.TRIGGER) html.push(renderTriggerEditor(ent));
-  if (ent.type === ENTITY_TYPES.BUTTON) html.push(renderButtonEditor(ent));
-  if (ent.type === ENTITY_TYPES.PLATE) html.push(renderPlateEditor(ent));
+  html.push(`<div style="margin-top:14px;"><button class="btn danger small" id="delete-ent" style="width:100%;">Supprimer cet élément</button></div>`);
 
   propsEl.innerHTML = html.join('');
   bindPropsInputs(ent);
+  bindPropsTabBar();
   if (previewMode) {
     // Bindings above still get attached (harmless — they'd just mutate an
     // in-memory level nothing ever saves), but disable every control so
@@ -1338,6 +1406,32 @@ function bindPropsInputs(ent) {
 function clampInt(v, min, max) { return Math.max(min, Math.min(max, Math.round(v))); }
 
 // ------------------------------------------------------- trigger/button/plate UI
+
+// The props panel's own tab bar for TRIGGER/BUTTON/PLATE (see renderProps's
+// isTabbedType) — same small pill look as the Actions panel's press/release
+// sub-tabs (.subtabs, shared on purpose). "Général" covers position/size/
+// display/state/orientation, exactly what every other entity type shows in
+// its one flat panel; "Actions" is the action list(s); "Activation" is the
+// timing/repeat/who-can-activate settings that used to always sit in view
+// under the label "Activation avancée" — now a dedicated tab instead of a
+// permanent wall of fields under the actions.
+function renderPropsTabBar() {
+  const tabs = [
+    ['general', '📋 Général'],
+    ['actions', '🧩 Actions'],
+    ['activation', '⚡ Activation'],
+  ];
+  return `<div class="subtabs">${tabs.map(([id, label]) =>
+    `<button type="button" class="btn small${propsTab === id ? ' active' : ''}" data-props-tab="${id}">${label}</button>`
+  ).join('')}</div>`;
+}
+
+function bindPropsTabBar() {
+  propsEl.querySelectorAll('[data-props-tab]').forEach((btn) => {
+    btn.addEventListener('click', () => { propsTab = btn.dataset.propsTab; renderProps(); });
+  });
+}
+
 function renderLoopCheckbox(ent) {
   return `<label class="toggle-row" style="margin-top:8px;"><input type="checkbox" id="p-loop" ${ent.props.loop ? 'checked' : ''} />Boucle infinie (une fois déclenché, répète les actions pour toujours)</label>`;
 }
@@ -1451,18 +1545,25 @@ function renderActionBlock(action) {
     </div>`;
 }
 
+// Each of these three now returns { actions, activation } instead of one
+// concatenated string — renderProps picks whichever half to show based on
+// its own props-panel tab (see renderPropsTabBar/isTabbedType), instead of
+// always stacking every card at once.
 function renderTriggerEditor(ent) {
-  return renderActionListEditor('Trigger', 'Se déclenche dès que le joueur entre dans la zone.', 'Actions déclenchées', ent) + renderAdvancedActivation(ent);
+  return {
+    actions: renderActionListEditor('Trigger', 'Se déclenche dès que le joueur entre dans la zone.', 'Actions déclenchées', ent),
+    activation: renderAdvancedActivation(ent),
+  };
 }
 
-// Shared "advanced activation" card for TRIGGER/BUTTON/PLATE — see
-// engine.js's _activate/_canActivate/_graceOverlap/_fireTrigger for how each
-// of these actually plays out at runtime. A plate can be activated by a
+// Shared "activation" card for TRIGGER/BUTTON/PLATE's own "⚡ Activation" tab
+// — see engine.js's _activate/_canActivate/_graceOverlap/_fireTrigger for how
+// each of these actually plays out at runtime. A plate can be activated by a
 // resting crate as well as the player (it always could); trigger/button stay
 // player-only unless explicitly opened up to crates here.
 function renderAdvancedActivation(ent) {
   const props = ent.props;
-  return fieldGroup('Activation avancée', `
+  return fieldGroup('Réglages d\'activation', `
     <label>Comportement au relâchement</label>
     ${selectHtml('p-releasemode', RELEASE_MODE_LABELS, props.releaseMode || 'finish')}
     <p class="hint">Les actions déjà lancées vont de toute façon jusqu'au bout, que le joueur reste dessus ou non — « fermer » rend en plus l'élément définitivement inutilisable une fois cette activation terminée.</p>
@@ -1500,7 +1601,10 @@ function renderButtonEditor(ent) {
   const hint = ent.props.reversible
     ? 'À chaque pression, le bouton alterne : il joue les actions, puis au clic suivant il les rejoue à l\'envers (retour à l\'état initial), et ainsi de suite. Sans effet si « Boucle infinie » est cochée.'
     : 'À chaque pression, le bouton rejoue ses actions depuis le début (toujours dans le même sens). Active « Inversement des actions » ci-dessous pour qu\'il alterne aller/retour à chaque pression.';
-  return renderActionListEditor('Bouton', hint, 'Actions déclenchées à chaque pression', ent, renderReversibleCheckbox(ent)) + renderAdvancedActivation(ent);
+  return {
+    actions: renderActionListEditor('Bouton', hint, 'Actions déclenchées à chaque pression', ent, renderReversibleCheckbox(ent)),
+    activation: renderAdvancedActivation(ent),
+  };
 }
 
 function renderPlateEditor(ent) {
@@ -1510,9 +1614,11 @@ function renderPlateEditor(ent) {
     loop: 'Un seul passage suffit à lancer une répétition de ces actions qui ne s\'arrête plus, même après être descendu.',
   }[ent.props.pressMode || 'hold'];
   const reversibleHint = ent.props.reversible ? ' Elles alternent aller/retour à chaque nouveau déclenchement.' : '';
-  return renderActionListEditor('Plaque de pression — à l\'appui', modeHint + reversibleHint, 'Actions à l\'appui', ent, renderReversibleCheckbox(ent))
-    + renderPlateReleaseEditor(ent)
-    + renderAdvancedActivation(ent);
+  return {
+    actions: renderActionListEditor('Plaque de pression — à l\'appui', modeHint + reversibleHint, 'Actions à l\'appui', ent, renderReversibleCheckbox(ent))
+      + renderPlateReleaseEditor(ent),
+    activation: renderAdvancedActivation(ent),
+  };
 }
 
 // A PLATE's second, independent action list: fires once, forward only, the
@@ -1888,6 +1994,8 @@ function bindToolbar() {
   });
 
   document.getElementById('playtest-btn').addEventListener('click', togglePlaytest);
+  const realViewBtnEl = document.getElementById('real-view-btn');
+  if (realViewBtnEl) realViewBtnEl.addEventListener('click', toggleEditRealView);
   document.getElementById('debug-view-btn').addEventListener('click', () => {
     if (!testEngine) return;
     testEngine.debugTriggers = !testEngine.debugTriggers;
@@ -1968,21 +2076,36 @@ function updateDebugViewBtn() {
 function togglePlaytest() {
   playtesting = !playtesting;
   const btn = document.getElementById('playtest-btn');
+  const realViewBtn = document.getElementById('real-view-btn');
   if (playtesting) {
     btn.textContent = '⏹ Arrêter le test';
+    if (realViewBtn) realViewBtn.style.display = 'none'; // its own edit-canvas concept, meaningless mid-playtest
     canvas.width = Math.min(900, level.cols * CELL);
     canvas.height = Math.min(520, level.rows * CELL);
     testEngine = new Engine(canvas, cloneLevel(level));
-    testEngine.debugTriggers = true; // start in debug view: easiest to build with
+    testEngine.debugTriggers = false; // starts in the real view by default — 🐞 debug view is the opt-in now
     testEngine.start();
   } else {
     btn.textContent = '▶ Tester le niveau';
+    if (realViewBtn) realViewBtn.style.display = '';
     if (testEngine) { testEngine.destroy(); testEngine = null; }
     resizeCanvas();
     render();
   }
   updateDebugViewBtn();
   updateUndoRedoButtons();
+}
+
+// The edit-canvas counterpart to the playtest's own debug/real toggle above
+// (updateDebugViewBtn) — same idea, but for the static builder view, and
+// without needing to start an interactive playtest at all: a straight
+// read-only preview of exactly what real play looks like (see render()).
+function toggleEditRealView() {
+  if (playtesting) return; // the button is hidden then anyway (see togglePlaytest)
+  editRealView = !editRealView;
+  const btn = document.getElementById('real-view-btn');
+  if (btn) btn.textContent = editRealView ? '🛠️ Revenir à l\'édition' : '🎬 Voir le jeu';
+  render();
 }
 
 init();

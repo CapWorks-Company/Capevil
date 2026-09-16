@@ -25,19 +25,19 @@
   </div>
 
   <div class="hud container" style="padding-top:12px;padding-bottom:0;">
-    <div>
+    <div class="flex-row">
       <strong id="level-title">Niveau</strong>
       <span class="muted" id="level-author"></span>
       <span class="pill hidden" id="official-badge" title="Ce niveau à été approuvé par un admin.">🏅 officiel</span>
     </div>
-    <div style="display:flex;gap:8px;align-items:center;">
+    <div class="flex-row">
       <button class="btn small hidden" id="like-btn">💖 Liker (<span id="like-count">0</span>)</button>
       <button class="btn small hidden" id="report-btn">🚩 Signaler</button>
       <div class="stat">Morts : <b id="deaths">0</b></div>
     </div>
   </div>
 
-  <div id="load-error" class="card hidden" style="margin:12px auto;max-width:640px;color:#ffb4b4;background:#3a1a1f;"></div>
+  <div id="load-error" class="card card-danger hidden" style="margin:12px auto;max-width:640px;color:#ffb4b4;"></div>
 
   <div class="stage-wrap">
     <canvas id="stage" width="1000" height="560"></canvas>
@@ -48,7 +48,7 @@
     <div class="box">
       <h2>🏆 Niveau terminé !</h2>
       <p>Nombre de morts : <b id="win-deaths">0</b></p>
-      <div style="display:flex;gap:10px;justify-content:center;margin-top:16px;">
+      <div class="flex-row center" style="margin-top:16px;">
         <button class="btn primary" id="win-restart">Rejouer</button>
         <a class="btn" href="index.html">Retour à l'accueil</a>
       </div>

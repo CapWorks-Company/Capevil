@@ -25,36 +25,36 @@
   </div>
 
   <div class="container">
-    <div id="backend-warning" class="card hidden" style="border-color:#e63946;background:#3a1a1f;">
+    <div id="backend-warning" class="card card-danger hidden">
       ⚠️ La base de données Supabase n'est pas encore configurée (voir <code>js/config.js</code>).
       Les niveaux publiés ne sont pas encore disponibles, mais tu peux quand même créer et jouer
       des niveaux enregistrés localement dans ton navigateur ci-dessous.
     </div>
 
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-        <h2 style="margin:0;">🏅 Parties officielles</h2>
-        <span class="muted" style="font-size:12.5px;">Sélectionnées et approuvées par un admin.</span>
+      <div class="card-header">
+        <h2>🏅 Parties officielles</h2>
+        <span class="muted label-hint">Sélectionnées et approuvées par un admin.</span>
       </div>
       <div class="level-grid" id="official-list"></div>
     </div>
 
     <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-        <h2 style="margin:0;">🌍 Niveaux publiés par la communauté</h2>
+      <div class="card-header">
+        <h2>🌍 Niveaux publiés par la communauté</h2>
         <input type="search" id="search" placeholder="🔍 Rechercher un niveau…" />
       </div>
       <div class="level-grid" id="levels-list"></div>
     </div>
 
     <div class="card">
-      <h2 style="margin-top:0;">📦 Mes niveaux publiés</h2>
+      <h2>📦 Mes niveaux publiés</h2>
       <p class="muted" id="my-levels-hint">Connecte-toi pour voir et gérer (modifier / supprimer) les niveaux publiés avec ton compte.</p>
       <div class="level-grid" id="my-levels-list"></div>
     </div>
 
     <div class="card">
-      <h2 style="margin-top:0;">💾 Mes brouillons (sauvegardés dans ce navigateur)</h2>
+      <h2>💾 Mes brouillons (sauvegardés dans ce navigateur)</h2>
       <div class="level-grid" id="local-list"></div>
     </div>
   </div>

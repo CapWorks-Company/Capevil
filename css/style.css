@@ -46,6 +46,14 @@ a:hover { text-decoration: underline; }
   -webkit-background-clip: text; background-clip: text; color: transparent;
 }
 .topbar nav { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+/* A second topbar row stacked under the first (editor's tool row) — same
+   band, just separated by a rule instead of a one-off inline border. */
+.topbar.topbar-sub { border-top: 1px solid var(--border); }
+#keybind-bar, #audio-bar { display: inline-flex; gap: 8px; align-items: center; }
+/* A <label> that wraps a hidden file input to make it look like a .btn. */
+.file-label { cursor: pointer; }
+/* A short muted caption trailing a button/label's own text. */
+.label-hint { font-size: 11px; }
 
 .btn {
   display: inline-flex; align-items: center; gap: 6px;
@@ -107,6 +115,51 @@ a:hover { text-decoration: underline; }
   padding: 18px; margin-bottom: 16px; box-shadow: var(--shadow);
 }
 .card h2 { font-family: var(--font-display); font-weight: 700; letter-spacing: .2px; }
+/* Every card/modal heading sits at the very top of its box — one rule here
+   instead of a `style="margin-top:0"` repeated on each individual <h2>. */
+.card h2, .card h3, .modal-box h2, .modal-box h3 { margin-top: 0; }
+
+/* A card (or modal box) that flags a problem — Supabase not configured, a
+   load error, an access issue — used the same red-tinted look in three
+   different places, each hand-written inline. One class now. */
+.card-danger, .modal-box.modal-danger { border-color: var(--danger); background: #3a1a1f; }
+.text-danger { color: #ff8a8a; }
+
+/* A card's title row when it needs something on the right (a hint, a search
+   box) alongside the <h2> — replaces the repeated
+   `style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;"`. */
+.card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+.card-header h2 { margin: 0; }
+
+/* A short block of preformatted code/SQL inside a card (admin setup
+   instructions, etc.) — was a one-off inline style. */
+.code-block {
+  background: #10111a; border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; font-size: 12px; overflow-x: auto; font-family: var(--font-mono, monospace);
+}
+
+/* Generic inline-flex row utilities for the small ad hoc `display:flex;
+   gap:Npx;align-items:center` groups scattered across the game HUD, win
+   overlay, and modals — three spacing steps cover every case in the app. */
+.flex-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.flex-row.tight { gap: 6px; }
+.flex-row.loose { gap: 12px; }
+.flex-row.center { justify-content: center; }
+.flex-row.between { justify-content: space-between; }
+
+/* A page-level notice banner (pick-a-target prompt, read-only preview
+   warning) — one shape, two color variants, instead of one living in a
+   page-local <style> block and the other inline on its own <div>. */
+.banner {
+  padding: 8px 14px; border-radius: 8px; margin: 8px 12px 0;
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 10px; font-size: 13px; flex-wrap: wrap;
+}
+.banner-warn { background: #f4d35e; color: #14151f; }
+.banner-alert { background: #c9184a; color: #fff; font-weight: 600; text-align: center; justify-content: center; }
+
+.container.narrow { max-width: 760px; }
+.container.wide { max-width: 1300px; }
 
 input[type="text"], input[type="search"], input[type="number"], input[type="email"], input[type="password"], select, textarea {
   background: #10111a; color: var(--text); border: 1px solid var(--border);
@@ -245,10 +298,13 @@ canvas#stage {
   display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
 }
 .actions-panel-header .spacer { flex: 1; }
-/* PLATE only: switches the panel below between its two independent action
-   lists (press / release) — see editor.js's renderActionsPanel. */
-.ap-subtabs { display: flex; gap: 6px; margin-bottom: 10px; }
-.ap-subtabs .btn.active {
+/* Shared small pill-tab row — used for the Actions panel's press/release
+   sub-tabs (PLATE only) AND the props panel's Général/Actions/Activation
+   tabs for TRIGGER/BUTTON/PLATE (see editor.js's renderActionsPanel /
+   renderPropsTabBar). One visual language for "sub-navigation within a
+   panel" everywhere it appears, instead of a bespoke look per panel. */
+.subtabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.subtabs .btn.active {
   border-color: var(--accent); background: linear-gradient(135deg, #3a2c14 0%, #2c2414 100%);
   box-shadow: inset 0 0 0 1px rgba(247,127,0,0.35);
 }
@@ -429,6 +485,23 @@ canvas#stage {
   border-radius: 8px; line-height: 1;
 }
 .modal-close:hover { background: var(--panel-2); color: var(--text); }
+/* Same "uppercase muted eyebrow label" convention as .field-group label in
+   the props panel, reused for modal sections (level settings, etc.) that
+   aren't inside a .field-group card. */
+.modal-label {
+  font-size: 11.5px; color: var(--muted); font-weight: 600; text-transform: uppercase;
+  letter-spacing: .4px; display: block; margin-top: 16px;
+}
+.modal-label:first-of-type { margin-top: 0; }
+.modal-grid-2 { display: flex; gap: 10px; margin-top: 6px; }
+.modal-grid-2 > div { flex: 1; }
+.modal-grid-2 input, .modal-field input { width: 100%; margin-top: 4px; }
+/* A small caption above a bare (non-field-group) input, e.g. in a modal. */
+.field-hint { font-size: 12px; display: block; }
+/* The 3x3 directional pad for shifting the level grid in Level Settings. */
+.shift-pad {
+  display: grid; grid-template-columns: repeat(3, 32px); grid-template-rows: repeat(3, 32px); gap: 3px;
+}
 .auth-form-modal { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
 .auth-form-modal label {
   font-size: 11.5px; color: var(--muted); font-weight: 600; text-transform: uppercase;
