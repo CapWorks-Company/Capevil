@@ -1398,8 +1398,13 @@ export class Engine {
     const midY = this.players.reduce((s, p) => s + p.y + p.h / 2, 0) / this.players.length;
     let cx = midX - cv.width / 2;
     let cy = midY - cv.height / 2;
-    cx = Math.max(0, Math.min(cx, Math.max(0, levelW - cv.width)));
-    cy = Math.max(0, Math.min(cy, Math.max(0, levelH - cv.height)));
+    // A level narrower/shorter than the viewport has nowhere to scroll on
+    // that axis — center it in the extra space instead of pinning it to the
+    // top-left corner (the old Math.max(0, …) clamp always won in that case,
+    // since levelW - cv.width was negative, so the level sat flush left/top
+    // with all the leftover background bunched on the other side).
+    cx = levelW <= cv.width ? (levelW - cv.width) / 2 : Math.max(0, Math.min(cx, levelW - cv.width));
+    cy = levelH <= cv.height ? (levelH - cv.height) / 2 : Math.max(0, Math.min(cy, levelH - cv.height));
     this.camera.x = cx; this.camera.y = cy;
   }
 
