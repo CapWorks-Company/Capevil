@@ -27,7 +27,10 @@
     <div class="card">
       <div class="card-header">
         <h2>🌍 Niveaux publiés par la communauté</h2>
-        <input type="search" id="search" placeholder="🔍 Rechercher un niveau…" />
+        <div class="flex-row">
+          <input type="search" id="search" placeholder="🔍 Rechercher un niveau…" />
+          <button class="btn small" id="random-level-btn" title="Lance un niveau publié au hasard">🎲 Niveau aléatoire</button>
+        </div>
       </div>
       <div class="level-grid" id="levels-list"></div>
     </div>

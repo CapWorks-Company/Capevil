@@ -220,6 +220,35 @@ export async function listTopPlayers(limit = 50) {
   return data || [];
 }
 
+// ---------------------------------------------------------------- notifications
+// Encouragement reçu, commentaire posté sur un de tes niveaux, ton
+// commentaire mis en avant (❤️) par un créateur — voir sql/schema.sql's
+// notify()/list_my_notifications()/count_unread_notifications()/
+// mark_notifications_read(). Consommé par la cloche 🔔 de js/account.js.
+export async function listMyNotifications(limit = 30) {
+  const client = await getClient();
+  if (!client) return [];
+  const { data, error } = await client.rpc('list_my_notifications', { p_limit: limit });
+  if (error) return [];
+  return data || [];
+}
+
+export async function countUnreadNotifications() {
+  const client = await getClient();
+  if (!client) return 0;
+  const { data: { session } } = await client.auth.getSession();
+  if (!session) return 0;
+  const { data, error } = await client.rpc('count_unread_notifications');
+  if (error) return 0;
+  return data || 0;
+}
+
+export async function markNotificationsRead() {
+  const client = await getClient();
+  if (!client) return;
+  await client.rpc('mark_notifications_read');
+}
+
 // ---------------------------------------------------------------- commentaires
 // Lecture publique directe (comme les niveaux) ; poster passe par
 // post_comment() côté serveur, qui vérifie le badge VIP — voir game.js.
@@ -234,7 +263,7 @@ export async function listComments(levelId) {
   if (!client) return { comments: [], error: 'not_configured' };
   const { data, error } = await client
     .from('comments')
-    .select('id, author_id, body, created_at')
+    .select('id, author_id, body, created_at, liked_by_owner')
     .eq('level_id', levelId)
     .order('created_at', { ascending: false });
   if (error) return { comments: [], error };
@@ -262,11 +291,32 @@ export async function deleteOwnComment(commentId) {
   return { error };
 }
 
+// Modération admin : supprime n'importe quel commentaire, pas seulement le
+// sien (voir sql/schema.sql's admin_delete_comment, qui vérifie is_admin_user()
+// côté serveur — ce garde-fou client n'est qu'un confort d'UI).
+export async function adminDeleteComment(commentId) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { error } = await client.rpc('admin_delete_comment', { p_comment_id: commentId });
+  return { error };
+}
+
+// Bascule le ❤️ "aimé par le créateur" sur un commentaire — réservé au
+// compte propriétaire du niveau commenté (vérifié côté serveur). Renvoie le
+// nouvel état pour mettre à jour l'icône sans tout re-fetch.
+export async function toggleOwnerLikeComment(commentId) {
+  const client = await getClient();
+  if (!client) return { error: 'not_configured' };
+  const { data, error } = await client.rpc('toggle_owner_like_comment', { p_comment_id: commentId });
+  if (error) return { error: error.message || 'error' };
+  return { error: null, likedByOwner: data };
+}
+
 // ---------------------------------------------------------------- admin (économie)
-export async function adminListProfiles(search = '') {
+export async function adminListProfiles(search = '', offset = 0) {
   const client = await getClient();
   if (!client) return { profiles: [], error: 'not_configured' };
-  const { data, error } = await client.rpc('admin_list_profiles', { p_search: search });
+  const { data, error } = await client.rpc('admin_list_profiles', { p_search: search, p_offset: offset });
   if (error) return { profiles: [], error };
   return { profiles: data, error: null };
 }
@@ -356,6 +406,17 @@ export async function listLevelsByOwner(ownerId) {
   return { levels: data, error: null };
 }
 
+// Un niveau publié pris au hasard (bouton "🎲 Niveau aléatoire" sur
+// community.html) — voir public.get_random_level(), accessible même
+// déconnecté. Renvoie null si aucun niveau n'est publié du tout.
+export async function getRandomLevelId() {
+  const client = await getClient();
+  if (!client) return { id: null, error: 'not_configured' };
+  const { data, error } = await client.rpc('get_random_level');
+  if (error) return { id: null, error: error.message || 'error' };
+  return { id: data, error: null };
+}
+
 // "Populaires" : les niveaux les plus likés, pour donner de la visibilité
 // aux parties que la communauté apprécie (indépendamment du statut officiel).
 export async function listTopLiked({ limit = 10 } = {}) {
@@ -373,10 +434,14 @@ export async function listTopLiked({ limit = 10 } = {}) {
 export async function getLevel(id) {
   const client = await getClient();
   if (!client) throw new Error('Supabase non configuré (voir js/config.js)');
-  const { data, error } = await client.from('levels').select('id, title, author, data, plays, wins, likes, approved').eq('id', id).single();
+  const { data, error } = await client.from('levels').select('id, owner_id, title, author, data, plays, wins, likes, approved').eq('id', id).single();
   if (error) throw error;
   const level = normalizeLevel({ ...data.data, id: data.id, title: data.title, author: data.author });
-  return { level, plays: data.plays, wins: data.wins, likes: data.likes, approved: data.approved };
+  // owner_id est renvoyé à part (pas dans `level`, qui reflète le JSON du
+  // niveau) — game.js s'en sert pour savoir si le compte connecté est le
+  // créateur de ce niveau (bouton ❤️ "aimé par le créateur" sur les
+  // commentaires, voir toggleOwnerLikeComment).
+  return { level, ownerId: data.owner_id, plays: data.plays, wins: data.wins, likes: data.likes, approved: data.approved };
 }
 
 export async function recordPlay(id) {

@@ -1,6 +1,6 @@
 import { isBackendReady, getSession } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
-import { mountSiteNav, refreshAdminLink } from './site-chrome.js';
+import { mountSiteNav, refreshAdminLink, refreshNotifBadge } from './site-chrome.js';
 import { escapeHtml, emptyState } from './level-cards.js';
 import { discoverCampaignLevels, unlockedCount, isUnlocked, syncCampaignProgress } from './campaign.js';
 import { SKIN_MILESTONES } from './catalog.js';
@@ -16,6 +16,7 @@ mountSiteNav(siteNav, 'adventure');
 mountAccountBar(accountBar, {
   onChange: async (session) => {
     refreshAdminLink(session);
+    refreshNotifBadge(session);
     guestNote.classList.toggle('hidden', !!session);
     if (session) await syncCampaignProgress(); // pulls the account's server progress in, merged with local (see campaign.js)
     render();

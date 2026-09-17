@@ -1,6 +1,6 @@
 import { getPublicProfile, listLevelsByOwner, getMyLikedLevelIds, hasEncouraged, encourage, unencourage, getSession } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
-import { mountSiteNav, refreshAdminLink } from './site-chrome.js';
+import { mountSiteNav, refreshAdminLink, refreshNotifBadge } from './site-chrome.js';
 import { levelRow, bindRowActions, emptyState, escapeHtml } from './level-cards.js';
 import { BADGES } from './catalog.js';
 import { showToast } from './ui-kit.js';
@@ -23,7 +23,7 @@ let currentSession = null;
 let likedLevelIds = new Set();
 let encouraged = false;
 
-mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; refreshAdminLink(session); updateEncourageBtn(); } });
+mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; refreshAdminLink(session); refreshNotifBadge(session); updateEncourageBtn(); } });
 
 async function load() {
   if (!profileId) { notFoundCard.classList.remove('hidden'); return; }

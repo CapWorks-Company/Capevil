@@ -50,11 +50,26 @@ async function refreshAdminPanels(session) {
 }
 
 // ------------------------------------------------------------- comptes joueurs
-async function refreshAccounts(search = '') {
-  const { profiles, error } = await adminListProfiles(search);
+// admin_list_profiles est plafonnée à 100 lignes par appel (voir
+// sql/schema.sql) — au-delà, un bouton "Charger plus" avance `accountsOffset`
+// et ACCUMULE les résultats plutôt que de les remplacer, pour qu'un site qui
+// grossit reste consultable dans son ensemble sans jamais rien perdre à
+// l'écran. Une nouvelle recherche repart de zéro (reset).
+let accountsSearch = '';
+let accountsOffset = 0;
+let accountsAccum = [];
+
+async function refreshAccounts(search = '', { reset = true } = {}) {
+  if (reset) { accountsSearch = search; accountsOffset = 0; accountsAccum = []; }
+  const { profiles, error } = await adminListProfiles(accountsSearch, accountsOffset);
   if (error) { accountsListEl.innerHTML = '<p class="muted">Erreur de chargement.</p>'; return; }
-  if (!profiles.length) { accountsListEl.innerHTML = '<p class="muted">Aucun compte trouvé.</p>'; return; }
-  accountsListEl.innerHTML = profiles.map((p) => {
+  accountsAccum = accountsAccum.concat(profiles);
+  renderAccountsList(profiles.length === 100);
+}
+
+function renderAccountsList(mayHaveMore) {
+  if (!accountsAccum.length) { accountsListEl.innerHTML = '<p class="muted">Aucun compte trouvé.</p>'; return; }
+  accountsListEl.innerHTML = accountsAccum.map((p) => {
     const owned = new Set(p.badges || []);
     return `
     <div class="card" style="display:flex;flex-direction:column;gap:8px;">
@@ -78,7 +93,7 @@ async function refreshAccounts(search = '') {
         <button class="btn small primary" data-save-acct="${p.id}">💾 Enregistrer</button>
       </div>
     </div>`;
-  }).join('');
+  }).join('') + (mayHaveMore ? '<button class="btn small" id="accounts-load-more">Charger plus…</button>' : '');
 
   accountsListEl.querySelectorAll('button[data-save-acct]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -93,6 +108,15 @@ async function refreshAccounts(search = '') {
       showToast('Compte mis à jour ✓', { type: 'success' });
     });
   });
+  const loadMoreBtn = document.getElementById('accounts-load-more');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', async () => {
+      loadMoreBtn.disabled = true;
+      loadMoreBtn.textContent = 'Chargement…';
+      accountsOffset += 100;
+      await refreshAccounts(accountsSearch, { reset: false });
+    });
+  }
 }
 
 accountSearchBtn.addEventListener('click', () => refreshAccounts(accountSearchInput.value.trim()));

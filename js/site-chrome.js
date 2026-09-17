@@ -3,7 +3,7 @@
 // account/profile) mounts the same row of links here instead of duplicating
 // this markup+wiring six times. `activeKey` just adds the `.primary` look to
 // whichever section the current page belongs to.
-import { amIAdmin } from './supabase-client.js';
+import { amIAdmin, countUnreadNotifications } from './supabase-client.js';
 
 const SECTIONS = [
   { key: 'adventure', href: 'adventure.html', icon: '🗺️', label: 'Aventure' },
@@ -14,7 +14,15 @@ const SECTIONS = [
 
 export function mountSiteNav(container, activeKey) {
   if (!container) return;
-  const sectionsHtml = SECTIONS.map((s) => `<a class="btn small${s.key === activeKey ? ' primary' : ''}" href="${s.href}">${s.icon} ${s.label}</a>`).join('');
+  const sectionsHtml = SECTIONS.map((s) => {
+    // Le badge 🔔 (nombre de notifications non lues) ne va que sur "Mon
+    // compte" — c'est là qu'il mène (voir refreshNotifBadge ci-dessous), et
+    // là que vit l'onglet Notifications lui-même (js/account.js).
+    const notifBadge = s.key === 'account'
+      ? ' <span class="pill hidden" id="notif-badge" style="padding:0 6px;font-size:10.5px;background:var(--danger);color:#fff;">0</span>'
+      : '';
+    return `<a class="btn small${s.key === activeKey ? ' primary' : ''}" href="${s.href}">${s.icon} ${s.label}${notifBadge}</a>`;
+  }).join('');
   container.innerHTML = `
     <a class="btn small" href="editor.html">+ Créer un niveau</a>
     ${sectionsHtml}
@@ -32,4 +40,19 @@ export async function refreshAdminLink(session) {
   if (!session) { adminLinkEl.classList.add('hidden'); return; }
   const admin = await amIAdmin();
   adminLinkEl.classList.toggle('hidden', !admin);
+}
+
+// 🔔 Petit badge de compteur sur le lien "Mon compte" — signale des
+// notifications non lues (encouragement reçu, commentaire, ❤️ créateur, voir
+// sql/schema.sql) sans avoir à ouvrir la page pour le savoir. Même schéma
+// d'appel que refreshAdminLink : une fois par page, après mountSiteNav, à
+// chaque changement de session (les deux se passent typiquement côte à côte
+// dans le onChange de mountAccountBar).
+export async function refreshNotifBadge(session) {
+  const badgeEl = document.getElementById('notif-badge');
+  if (!badgeEl) return;
+  if (!session) { badgeEl.classList.add('hidden'); return; }
+  const count = await countUnreadNotifications();
+  badgeEl.textContent = count > 9 ? '9+' : String(count);
+  badgeEl.classList.toggle('hidden', count === 0);
 }

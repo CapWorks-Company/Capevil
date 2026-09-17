@@ -44,6 +44,7 @@
       <button type="button" class="btn small" data-tab="shop">🛍️ Boutique</button>
       <button type="button" class="btn small" data-tab="skins">🎨 Mes skins</button>
       <button type="button" class="btn small" data-tab="top">🏆 Top Joueurs</button>
+      <button type="button" class="btn small" data-tab="notifications">🔔 Notifications <span class="pill hidden" id="notif-tab-badge" style="padding:0 6px;font-size:10.5px;background:var(--danger);color:#fff;">0</span></button>
     </div>
 
     <div class="card" id="tab-projects">
@@ -74,6 +75,12 @@
       <h2>🏆 Top Joueurs</h2>
       <p class="muted">Classé sur le nombre d'encouragements reçus — va encourager tes joueurs préférés depuis leur profil !</p>
       <div id="top-players-list"></div>
+    </div>
+
+    <div class="card hidden" id="tab-notifications">
+      <h2>🔔 Notifications</h2>
+      <p class="muted">Encouragements reçus, commentaires sur tes niveaux, et commentaires que tu as mis en avant — les plus récents en premier.</p>
+      <div id="notifications-list"></div>
     </div>
   </div>
 

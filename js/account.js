@@ -1,13 +1,14 @@
 import {
   isBackendReady, listMyLevels, deleteOwnLevel, getMyFullProfile,
   buyBadge, setSkin, listTopPlayers,
+  listMyNotifications, markNotificationsRead, countUnreadNotifications,
 } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
-import { mountSiteNav, refreshAdminLink } from './site-chrome.js';
+import { mountSiteNav, refreshAdminLink, refreshNotifBadge } from './site-chrome.js';
 import { showToast, confirmModal } from './ui-kit.js';
 import { listLocalDrafts, deleteLocalDraft } from './local-storage.js';
 import { escapeHtml, emptyState } from './level-cards.js';
-import { BADGES, PLAYER_SKINS, OBJECT_SKINS, maxProjectsForBadges } from './catalog.js';
+import { BADGES, badgeById, PLAYER_SKINS, OBJECT_SKINS, maxProjectsForBadges } from './catalog.js';
 
 const backendWarning = document.getElementById('backend-warning');
 const accountBar = document.getElementById('account-bar');
@@ -23,6 +24,8 @@ const localListEl = document.getElementById('local-list');
 const shopListEl = document.getElementById('shop-list');
 const skinsEditorEl = document.getElementById('skins-editor');
 const topPlayersEl = document.getElementById('top-players-list');
+const notificationsListEl = document.getElementById('notifications-list');
+const notifTabBadge = document.getElementById('notif-tab-badge');
 
 let currentSession = null;
 let myProfile = null; // full profile (coins/badges/skins) — only set when signed in, see refreshProfile()
@@ -33,15 +36,27 @@ mountAccountBar(accountBar, {
     currentSession = session;
     signedOutCard.classList.toggle('hidden', !!session);
     refreshAdminLink(session);
+    refreshNotifBadge(session);
+    refreshNotifTabBadge(session);
     refreshProfile();
     refreshMyLevels();
   },
 });
 
+// Même compteur que la cloche du site-nav (refreshNotifBadge), mais affiché
+// directement sur l'onglet "🔔 Notifications" lui-même — les deux se mettent
+// à jour ensemble, l'un dans le nav partagé, l'autre ici sur account.html.
+async function refreshNotifTabBadge(session) {
+  if (!session) { notifTabBadge.classList.add('hidden'); return; }
+  const count = await countUnreadNotifications();
+  notifTabBadge.textContent = count > 9 ? '9+' : String(count);
+  notifTabBadge.classList.toggle('hidden', count === 0);
+}
+
 isBackendReady().then((ready) => { if (!ready) backendWarning.classList.remove('hidden'); });
 
 // -------------------------------------------------------------- tabs
-const TABS = ['projects', 'drafts', 'shop', 'skins', 'top'];
+const TABS = ['projects', 'drafts', 'shop', 'skins', 'top', 'notifications'];
 function switchTab(tab) {
   if (!TABS.includes(tab)) tab = 'projects';
   for (const t of TABS) {
@@ -51,6 +66,7 @@ function switchTab(tab) {
   }
   history.replaceState(null, '', `#${tab}`);
   if (tab === 'top') refreshTopPlayers();
+  if (tab === 'notifications') refreshNotifications();
 }
 document.querySelectorAll('#account-tabs [data-tab]').forEach((btn) => {
   btn.addEventListener('click', () => switchTab(btn.dataset.tab));
@@ -177,6 +193,15 @@ function renderShop() {
   }).join('');
   shopListEl.querySelectorAll('button[data-buy]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      const badge = badgeById(btn.dataset.buy);
+      // Un achat dépense des Evicoins et n'a pas de "retour en arrière" (pas
+      // de remboursement) — une confirmation évite un clic accidentel qui
+      // viderait le compte, surtout pour les badges à 1000 Evicoins.
+      const ok = await confirmModal(
+        `Acheter ${badge ? `${badge.icon} ${badge.label}` : 'ce badge'} pour 🪙 ${badge ? badge.price : '?'} Evicoins ?`,
+        { title: 'Confirmer l\'achat', okLabel: 'Acheter', cancelLabel: 'Annuler' },
+      );
+      if (!ok) return;
       btn.disabled = true;
       const result = await buyBadge(btn.dataset.buy);
       if (result.error) {
@@ -250,6 +275,41 @@ async function refreshTopPlayers() {
           </tr>`).join('')}
       </tbody>
     </table>`;
+}
+
+// -------------------------------------------------------------- notifications
+const NOTIF_ICON = { encouragement: '💪', comment: '💬', comment_liked: '❤️' };
+function notifLabel(n) {
+  const who = escapeHtml(n.actor_name);
+  const onLevel = n.level_title ? ` sur « ${escapeHtml(n.level_title)} »` : '';
+  if (n.kind === 'encouragement') return `${who} t'a encouragé`;
+  if (n.kind === 'comment') return `${who} a commenté ton niveau${onLevel}`;
+  if (n.kind === 'comment_liked') return `${who} a mis en avant ton commentaire avec un ❤️${onLevel}`;
+  return `${who} — ${escapeHtml(n.kind)}`;
+}
+
+// Rendu d'abord, marquage "lu" ensuite : la liste elle-même reflète encore
+// qui était nouveau depuis la dernière visite (léger fond de mise en avant),
+// et la cloche (ici + celle du site-nav) ne retombe à 0 qu'une fois
+// l'utilisateur effectivement passé sur cet onglet — pas juste en se
+// connectant ou en ouvrant une autre page.
+async function refreshNotifications() {
+  notificationsListEl.innerHTML = '<p class="muted">Chargement…</p>';
+  const notifs = await listMyNotifications(30);
+  if (!notifs.length) {
+    notificationsListEl.innerHTML = emptyState('Rien pour l\'instant — reviens plus tard !');
+  } else {
+    notificationsListEl.innerHTML = notifs.map((n) => `
+      <div class="card" style="padding:10px 14px;margin-bottom:6px;${n.read_at ? '' : 'border-color:var(--accent);'}">
+        <div class="flex-row" style="justify-content:space-between;">
+          <span>${NOTIF_ICON[n.kind] || '🔔'} ${notifLabel(n)}</span>
+          <span class="muted" style="font-size:11px;white-space:nowrap;">${new Date(n.created_at).toLocaleDateString('fr-FR')}</span>
+        </div>
+      </div>`).join('');
+  }
+  await markNotificationsRead();
+  notifTabBadge.classList.add('hidden');
+  refreshNotifBadge(currentSession);
 }
 
 refreshMyLevels();

@@ -1,6 +1,6 @@
 import { listLevels, isBackendReady, getMyLikedLevelIds, onAuthChange } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
-import { mountSiteNav, refreshAdminLink } from './site-chrome.js';
+import { mountSiteNav, refreshAdminLink, refreshNotifBadge } from './site-chrome.js';
 import { levelRow, bindRowActions, emptyState } from './level-cards.js';
 
 const listEl = document.getElementById('official-list');
@@ -12,7 +12,7 @@ let currentSession = null;
 let likedLevelIds = new Set();
 
 mountSiteNav(siteNav, 'official');
-mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; likedLevelIds = new Set(); refresh(); refreshAdminLink(session); } });
+mountAccountBar(accountBar, { onChange: (session) => { currentSession = session; likedLevelIds = new Set(); refresh(); refreshAdminLink(session); refreshNotifBadge(session); } });
 
 async function refresh() {
   const ready = await isBackendReady();

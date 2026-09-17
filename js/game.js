@@ -3,7 +3,7 @@ import { buildSampleLevel } from './sample-level.js';
 import { deserializeLevel, createEmptyLevel } from './level-model.js';
 import {
   getLevel, recordPlay, recordWin, likeLevel, hasLikedLevel, reportLevel, hasReportedLevel, isBackendReady,
-  claimWinReward, listComments, postComment, getMyFullProfile,
+  claimWinReward, listComments, postComment, getMyFullProfile, amIAdmin, adminDeleteComment, toggleOwnerLikeComment,
 } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
 import { mountKeybindButton } from './keybind-ui.js';
@@ -125,6 +125,7 @@ let campaignLevels = null; // set by loadLevel() once discovery resolves — onW
 let engine = null;
 let session = null;
 let loadedLevel = null; // set once loadLevel() resolves — lets the resize handler re-fit the canvas later
+let remoteLevelOwnerId = null; // owner_id of the published level currently loaded, or null (local/campaign level, or not loaded yet)
 
 isBackendReady().then((ready) => { if (ready) mountAccountBar(accountBarEl, { onChange: (s) => { session = s; refreshLikeButtonState(); refreshReportButtonState(); refreshCommentFormState(s); } }); });
 
@@ -153,7 +154,8 @@ mountAudioButton(document.getElementById('audio-bar'));
 async function loadLevel() {
   if (remoteId) {
     try {
-      const { level, likes, approved } = await getLevel(remoteId);
+      const { level, ownerId, likes, approved } = await getLevel(remoteId);
+      remoteLevelOwnerId = ownerId;
       recordPlay(remoteId);
       likeCountEl.textContent = likes ?? 0;
       likeBtn.classList.remove('hidden');
@@ -270,8 +272,11 @@ loadLevel().then(async (level) => {
 
   // Comments only make sense for a real published level (a levels.id row to
   // attach to) — a campaign level (static JSON, no DB row) or a local draft
-  // never shows the section at all.
-  if (remoteId) { commentsCard.classList.remove('hidden'); refreshComments(); }
+  // never shows the section at all. Recomputes the VIP/admin/owner flags
+  // here (not just refreshComments()) because `remoteLevelOwnerId` has only
+  // just been set above — if the account bar's onChange already ran once
+  // before this, its iAmLevelOwner check ran too early to see it.
+  if (remoteId) { commentsCard.classList.remove('hidden'); refreshCommentFormState(session); }
 });
 
 // Re-fit if the window is resized after load (rotating a tablet, resizing a
@@ -285,27 +290,75 @@ window.addEventListener('resize', () => { if (loadedLevel) sizeCanvasToLevel(loa
 // formulaire est simplement caché/désactivé sans ce badge plutôt que de
 // laisser quelqu'un taper un commentaire pour se le voir refuser à la fin).
 let iAmVip = false;
+// Modération : un admin peut supprimer n'importe quel commentaire (bouton
+// 🗑️ directement ici, là où le contenu à modérer est déjà affiché — pas de
+// panneau séparé dans admin.html pour ça). Le créateur du niveau peut en
+// plus mettre en avant un commentaire avec un ❤️ (voir toggle_owner_like_
+// comment côté serveur) ; les deux droits sont indépendants et peuvent
+// cumuler sur le même compte si l'admin a aussi publié ce niveau.
+let iAmAdmin = false;
+let iAmLevelOwner = false;
+
+function escapeCommentHtml(s) {
+  return (s || '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
 
 async function refreshComments() {
   const { comments } = await listComments(remoteId);
   if (!comments.length) {
     commentsListEl.innerHTML = '<p>Aucun commentaire pour l\'instant.</p>';
-  } else {
-    commentsListEl.innerHTML = comments.map((c) => `
-      <div style="padding:8px 0;border-bottom:1px solid var(--border);">
-        <strong style="color:var(--text);">${(c.author_name || '—').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]))}</strong>
-        <span style="font-size:11px;">${new Date(c.created_at).toLocaleDateString('fr-FR')}</span>
-        <div>${c.body.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]))}</div>
-      </div>`).join('');
+    return;
   }
+  commentsListEl.innerHTML = comments.map((c) => `
+    <div class="comment-row" data-comment="${c.id}" style="padding:8px 0;border-bottom:1px solid var(--border);">
+      <div class="flex-row" style="justify-content:space-between;align-items:flex-start;">
+        <div>
+          <strong style="color:var(--text);">${escapeCommentHtml(c.author_name || '—')}</strong>
+          <span style="font-size:11px;">${new Date(c.created_at).toLocaleDateString('fr-FR')}</span>
+          ${c.liked_by_owner ? '<span class="pill" style="font-size:11px;" title="Aimé par le créateur du niveau">❤️ créateur</span>' : ''}
+        </div>
+        <div class="flex-row" style="gap:6px;">
+          ${iAmLevelOwner ? `<button class="btn small" data-heart="${c.id}" title="${c.liked_by_owner ? 'Retirer le ❤️' : 'Mettre en avant avec un ❤️'}">${c.liked_by_owner ? '❤️' : '🤍'}</button>` : ''}
+          ${iAmAdmin ? `<button class="btn small danger" data-mod-delete="${c.id}" title="Supprimer (modération admin)">🗑️</button>` : ''}
+        </div>
+      </div>
+      <div>${escapeCommentHtml(c.body)}</div>
+    </div>`).join('');
+
+  commentsListEl.querySelectorAll('button[data-heart]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const { error } = await toggleOwnerLikeComment(btn.dataset.heart);
+      if (error) showToast("Erreur lors de la mise à jour du ❤️.", { type: 'error' });
+      await refreshComments();
+    });
+  });
+  commentsListEl.querySelectorAll('button[data-mod-delete]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const { error } = await adminDeleteComment(btn.dataset.modDelete);
+      if (error) { showToast("Erreur lors de la suppression.", { type: 'error' }); btn.disabled = false; return; }
+      showToast('Commentaire supprimé ✓', { type: 'success' });
+      await refreshComments();
+    });
+  });
 }
 
 async function refreshCommentFormState(session) {
-  if (!session) { commentFormVip.classList.add('hidden'); commentFormLocked.classList.add('hidden'); return; }
-  const profile = await getMyFullProfile();
+  if (!session) {
+    commentFormVip.classList.add('hidden');
+    commentFormLocked.classList.add('hidden');
+    iAmVip = false; iAmAdmin = false; iAmLevelOwner = false;
+    if (remoteId) refreshComments();
+    return;
+  }
+  const [profile, admin] = await Promise.all([getMyFullProfile(), amIAdmin()]);
   iAmVip = !!(profile && (profile.badges || []).includes('vip'));
+  iAmAdmin = admin;
+  iAmLevelOwner = !!(remoteLevelOwnerId && session.user.id === remoteLevelOwnerId);
   commentFormVip.classList.toggle('hidden', !iAmVip);
   commentFormLocked.classList.toggle('hidden', iAmVip);
+  if (remoteId) refreshComments();
 }
 
 commentPostBtn.addEventListener('click', async () => {

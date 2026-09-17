@@ -5,13 +5,13 @@
 // account bar + backend warning) — see js/site-chrome.js.
 import { isBackendReady } from './supabase-client.js';
 import { mountAccountBar } from './auth-ui.js';
-import { mountSiteNav, refreshAdminLink } from './site-chrome.js';
+import { mountSiteNav, refreshAdminLink, refreshNotifBadge } from './site-chrome.js';
 
 const backendWarning = document.getElementById('backend-warning');
 const accountBar = document.getElementById('account-bar');
 const siteNav = document.getElementById('site-nav');
 
 mountSiteNav(siteNav, null);
-mountAccountBar(accountBar, { onChange: (session) => refreshAdminLink(session) });
+mountAccountBar(accountBar, { onChange: (session) => { refreshAdminLink(session); refreshNotifBadge(session); } });
 
 isBackendReady().then((ready) => { if (!ready) backendWarning.classList.remove('hidden'); });
